@@ -1,1 +1,1 @@
-# imto-cross-border-payment
+# itmo-cross-border-payment
