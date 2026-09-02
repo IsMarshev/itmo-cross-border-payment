@@ -1,0 +1,33 @@
+[project]
+name = "cross-border-payment-signal-layer"
+version = "0.1.0"
+description = "Data foundation for a cross-border payment exchange-rate signal layer."
+authors = [{ name = "ITMO Cross-Border Payment Team" }]
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "pandas>=2.2,<3.0",
+    "numpy>=2.0,<3.0",
+]
+
+[tool.poetry]
+packages = [{ include = "signal_layer", from = "src" }]
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.3,<9.0"
+ruff = ">=0.8,<1.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
