@@ -52,3 +52,15 @@ def test_features_columns_present() -> None:
     non_usd_cols = tuple(c for c in FEATURE_COLUMNS if c != "rub_strength")
     for col in non_usd_cols:
         assert feats[col].notna().sum() > 200
+
+
+def test_features_asof_uses_publication_date_when_present() -> None:
+    panel = _toy_panel(100)
+    panel["available_on"] = panel["quote_date"] + pd.offsets.Day(2)
+    features = compute_features(panel)
+    as_of = panel.iloc[50]["quote_date"] + pd.offsets.Day(1)
+
+    snapshot = features_asof(features, as_of, "TJS")
+
+    assert snapshot["available_on"].max() <= as_of
+    assert panel.iloc[50]["quote_date"] not in set(snapshot["quote_date"])

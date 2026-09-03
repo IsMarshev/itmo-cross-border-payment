@@ -148,6 +148,10 @@
 
 ## Этап 4. Честный baseline и движок бэктеста
 
+**Статус: реализовано в backend-ветке.** Каноническая реализация находится в
+`signal_layer.backtesting`; CLI — `python -m signal_layer.run_backtest`, HTTP
+интерфейс — `POST /v1/backtests/run`.
+
 ### Что сделать
 
 - Задать outcome для офлайн-оценки:

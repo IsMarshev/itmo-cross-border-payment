@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -68,17 +69,26 @@ class RateService:
     def currency_history(self, currency: str) -> pd.DataFrame:
         """Return one currency's canonical panel in quote-date order."""
         normalized_currency = self._normalize_currency(currency)
-        try:
-            panel = read_rate_directory(self._data_dir, currencies=[normalized_currency])
-        except (FileNotFoundError, RateDataError) as error:
-            raise RateDataUnavailableError(str(error)) from error
+        panel = self.panel([normalized_currency])
         return panel.loc[panel["iso"] == normalized_currency].reset_index(drop=True)
 
-    def _load_panel(self) -> pd.DataFrame:
+    def panel(self, currencies: Iterable[str] | None = None) -> pd.DataFrame:
+        """Return a validated panel for domain services and offline evaluation."""
+        normalized = None
+        if currencies is not None:
+            normalized = [self._normalize_currency(currency) for currency in currencies]
         try:
-            return read_rate_directory(self._data_dir)
+            return read_rate_directory(self._data_dir, currencies=normalized)
         except (FileNotFoundError, RateDataError) as error:
             raise RateDataUnavailableError(str(error)) from error
+
+    def panel_asof(self, currencies: Iterable[str], as_of: date) -> pd.DataFrame:
+        """Return only observations already available on the decision date."""
+        panel = self.panel(currencies)
+        return panel.loc[panel["available_on"] <= pd.Timestamp(as_of)].reset_index(drop=True)
+
+    def _load_panel(self) -> pd.DataFrame:
+        return self.panel()
 
     @staticmethod
     def _normalize_currency(currency: str) -> str:

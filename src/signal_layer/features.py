@@ -180,7 +180,11 @@ def compute_features(
     else:
         feats["rub_strength"] = np.nan
 
-    return feats[list(("quote_date", "iso", "rub_per_unit") + FEATURE_COLUMNS)]
+    identity_columns = ["quote_date"]
+    if "available_on" in feats.columns:
+        identity_columns.append("available_on")
+    identity_columns.extend(["iso", "rub_per_unit"])
+    return feats[identity_columns + list(FEATURE_COLUMNS)]
 
 
 def features_asof(
@@ -191,6 +195,7 @@ def features_asof(
     Drops any row whose ``quote_date`` is strictly after ``asof_date``. This is
     the single leakage-safe entry point a serving layer would call.
     """
+    availability_column = "available_on" if "available_on" in features.columns else "quote_date"
     return features[
-        (features["iso"] == iso) & (features["quote_date"] <= asof_date)
+        (features["iso"] == iso) & (features[availability_column] <= asof_date)
     ].sort_values("quote_date")

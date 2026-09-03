@@ -19,11 +19,44 @@ poetry run ruff check .
 poetry run uvicorn signal_layer.api.app:app --reload
 ```
 
-The service exposes `GET /health`, `GET /v1/rates/{ISO}/latest` and
-`GET /v1/signals/{ISO}/evaluate`. The signal endpoint is a deterministic,
-fact-only baseline: it returns a *candidate* for communication when the current
-available rate is low relative to its trailing history. It does not deliver a
-push, retain customer data or claim to forecast a future exchange rate.
+The service exposes:
+
+- `GET /health`;
+- `GET /v1/rates/{ISO}/latest?as_of=YYYY-MM-DD`;
+- `GET /v1/signals/{ISO}/evaluate?as_of=YYYY-MM-DD&strategy=baseline|ridge`;
+- `POST /v1/backtests/run`.
+
+The signal endpoint returns a non-stateful *candidate*, not a delivered push.
+Its client-facing message contains only a trailing-rate fact. The optional
+Ridge strategy is trained only on targets whose full future horizon was already
+available by the requested as-of date.
+
+## Stage-4 backtest
+
+Run the canonical baseline backtest and write an exhaustive decision journal,
+matched random schedules and a summary report:
+
+```bash
+poetry run python -m signal_layer.run_backtest \
+  --corridors TJS UZS KGS AMD KZT \
+  --score-source baseline \
+  --horizon 20 \
+  --out reports/backtest
+```
+
+`decision_log.jsonl` includes every evaluated day, the historical threshold,
+remaining communication slots, decision reason and realised outcome. Outcomes
+are joined only after the chronological policy has completed. The random
+baseline selects the same number of dates inside every corridor and
+communication window. Confidence intervals use moving-block bootstrap.
+
+Each run also produces a standalone `dashboard.html` with KPI, confidence
+intervals, matched-random comparison, risk, signal frequency and outcome
+distribution. Regenerate it independently with:
+
+```bash
+poetry run python -m signal_layer.dashboard --report-dir reports/backtest
+```
 
 ## Rate data contract
 

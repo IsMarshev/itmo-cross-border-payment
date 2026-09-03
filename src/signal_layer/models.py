@@ -16,6 +16,8 @@ during training and unknown at serving time.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -31,6 +33,18 @@ DEFAULT_H = 20
 class RidgeConfig:
     alpha: float = 1.0
     h: int = DEFAULT_H
+
+
+@dataclass(frozen=True, slots=True)
+class ModelPrediction:
+    """One as-of model prediction made from an already available quote."""
+
+    currency: str
+    quote_date: date
+    available_on: date
+    predicted_advantage_bps: float
+    training_observations: int
+    model: Literal["ridge", "catboost"]
 
 
 class RidgeModel:
@@ -72,51 +86,88 @@ def make_target(panel: pd.DataFrame, iso: str, h: int = DEFAULT_H) -> pd.DataFra
     ``advantage = (median(p_{t+1..t+H}) - p_t) / p_t * 10_000``. The last ``h``
     observations have no full future window and get NaN (dropped at fit time).
     """
+    if h <= 0:
+        raise ValueError("h must be positive")
     s = panel.loc[panel["iso"] == iso].sort_values("quote_date").reset_index(drop=True)
+    if "available_on" not in s.columns:
+        s["available_on"] = s["quote_date"]
     v = s["rub_per_unit"].astype(float).to_numpy()
     adv = np.full(len(v), np.nan)
+    target_available_on = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
     for i in range(len(v) - h):
         future = v[i + 1 : i + 1 + h]
         adv[i] = (np.median(future) - v[i]) / v[i] * 10_000.0
-    s = s.assign(advantage=adv)
-    return s[["quote_date", "iso", "rub_per_unit", "advantage"]]
+        target_available_on.iloc[i] = s.loc[i + h, "available_on"]
+    s = s.assign(advantage=adv, target_available_on=target_available_on)
+    return s[
+        [
+            "quote_date",
+            "available_on",
+            "iso",
+            "rub_per_unit",
+            "advantage",
+            "target_available_on",
+        ]
+    ]
 
 
 def build_dataset(
-    panel: pd.DataFrame, iso: str, h: int = DEFAULT_H
+    panel: pd.DataFrame,
+    iso: str,
+    h: int = DEFAULT_H,
+    *,
+    include_unlabelled: bool = False,
 ) -> pd.DataFrame:
-    """Join features and target for one corridor, dropping rows with NaNs."""
+    """Join features and targets while retaining target maturity timestamps."""
     feats = compute_features(panel)
     feats = feats[feats["iso"] == iso].sort_values("quote_date").reset_index(drop=True)
     tgt = make_target(panel, iso, h=h)
-    df = feats.merge(tgt[["quote_date", "advantage"]], on="quote_date", how="inner")
-    df = df.dropna(subset=list(FEATURE_COLUMNS) + ["advantage"]).reset_index(drop=True)
+    df = feats.merge(
+        tgt[["quote_date", "advantage", "target_available_on"]],
+        on="quote_date",
+        how="inner",
+    )
+    required = list(FEATURE_COLUMNS)
+    if not include_unlabelled:
+        required.append("advantage")
+    df = df.dropna(subset=required).reset_index(drop=True)
     return df
 
 
 def _walk_forward(
-    X: np.ndarray,
-    y: np.ndarray,
-    dates: np.ndarray,
+    dataset: pd.DataFrame,
     iso: str,
-    rates: np.ndarray,
     min_train: int,
     fit_fn,
 ) -> pd.DataFrame:
-    """Generic expanding-window walk-forward. ``fit_fn(X_tr, y_tr) -> predict_fn``."""
-    preds = np.full(len(X), np.nan)
-    for i in range(min_train, len(X)):
-        predict_fn = fit_fn(X[:i], y[:i])
-        preds[i] = float(predict_fn(X[i : i + 1])[0])
-    return pd.DataFrame(
-        {
-            "quote_date": dates,
-            "iso": iso,
-            "rub_per_unit": rates,
-            "advantage": y,
-            "pred_advantage": preds,
-        }
-    ).dropna(subset=["pred_advantage"])
+    """Expanding walk-forward using only targets matured by decision time."""
+    X = dataset[list(FEATURE_COLUMNS)].to_numpy(dtype=float)
+    predictions = np.full(len(dataset), np.nan)
+    training_sizes = np.zeros(len(dataset), dtype=int)
+    for i, row in dataset.iterrows():
+        decision_time = row["available_on"]
+        train_mask = (
+            dataset["advantage"].notna()
+            & dataset["target_available_on"].notna()
+            & (dataset["target_available_on"] <= decision_time)
+            & (dataset["quote_date"] < row["quote_date"])
+        )
+        train_indices = np.flatnonzero(train_mask.to_numpy())
+        training_sizes[i] = len(train_indices)
+        if len(train_indices) < min_train:
+            continue
+        X_train = X[train_indices]
+        y_train = dataset.iloc[train_indices]["advantage"].to_numpy(dtype=float)
+        predict_fn = fit_fn(X_train, y_train)
+        predictions[i] = float(predict_fn(X[i : i + 1])[0])
+
+    result = dataset[
+        ["quote_date", "available_on", "rub_per_unit", "advantage", "target_available_on"]
+    ].copy()
+    result.insert(2, "iso", iso)
+    result["pred_advantage"] = predictions
+    result["training_observations"] = training_sizes
+    return result.dropna(subset=["pred_advantage"]).reset_index(drop=True)
 
 
 def walk_forward_predict(
@@ -144,22 +195,19 @@ def walk_forward_predict(
     pred_advantage`` — the raw model output. Thresholding into signals happens
     in the backtester / policy, not here.
     """
-    df = build_dataset(panel, iso, h=h)
-    X = df[list(FEATURE_COLUMNS)].to_numpy(dtype=float)
-    y = df["advantage"].to_numpy(dtype=float)
-    dates = df["quote_date"].to_numpy()
-    rates = df["rub_per_unit"].to_numpy(dtype=float)
+    df = build_dataset(panel, iso, h=h, include_unlabelled=True)
 
     if model == "ridge":
-        def fit_fn(X_tr, y_tr):
+        def fit_fn(X_tr: np.ndarray, y_tr: np.ndarray):
             m = RidgeModel(alpha=alpha).fit(X_tr, y_tr)
             return m.predict
-        return _walk_forward(X, y, dates, iso, rates, min_train, fit_fn)
+
+        return _walk_forward(df, iso, min_train, fit_fn)
 
     if model == "catboost":
         from catboost import CatBoostRegressor
 
-        def fit_fn(X_tr, y_tr):
+        def fit_fn(X_tr: np.ndarray, y_tr: np.ndarray):
             m = CatBoostRegressor(
                 iterations=catboost_iters,
                 depth=catboost_depth,
@@ -171,6 +219,53 @@ def walk_forward_predict(
             )
             m.fit(X_tr, y_tr)
             return m.predict
-        return _walk_forward(X, y, dates, iso, rates, min_train, fit_fn)
+
+        return _walk_forward(df, iso, min_train, fit_fn)
 
     raise ValueError(f"Unknown model {model!r}; expected 'ridge' or 'catboost'")
+
+
+def predict_asof(
+    panel: pd.DataFrame,
+    iso: str,
+    as_of: date | pd.Timestamp,
+    *,
+    min_train: int = 500,
+    h: int = DEFAULT_H,
+    alpha: float = 1.0,
+) -> ModelPrediction:
+    """Fit the Ridge value head on matured targets and predict the latest quote."""
+    decision_time = pd.Timestamp(as_of)
+    availability_column = "available_on" if "available_on" in panel.columns else "quote_date"
+    available_panel = panel.loc[panel[availability_column] <= decision_time].copy()
+    dataset = build_dataset(available_panel, iso, h=h, include_unlabelled=True)
+    if dataset.empty:
+        raise ValueError(
+            f"No feature-complete {iso} observations are available by {decision_time.date()}"
+        )
+
+    current = dataset.iloc[-1]
+    train = dataset.loc[
+        dataset["advantage"].notna()
+        & dataset["target_available_on"].notna()
+        & (dataset["target_available_on"] <= decision_time)
+        & (dataset["quote_date"] < current["quote_date"])
+    ]
+    if len(train) < min_train:
+        raise ValueError(
+            f"{iso} has only {len(train)} matured training observations; {min_train} are required"
+        )
+
+    model = RidgeModel(alpha=alpha).fit(
+        train[list(FEATURE_COLUMNS)].to_numpy(dtype=float),
+        train["advantage"].to_numpy(dtype=float),
+    )
+    score = float(model.predict(current[list(FEATURE_COLUMNS)].to_numpy(dtype=float)[None, :])[0])
+    return ModelPrediction(
+        currency=iso,
+        quote_date=current["quote_date"].date(),
+        available_on=current["available_on"].date(),
+        predicted_advantage_bps=score,
+        training_observations=len(train),
+        model="ridge",
+    )

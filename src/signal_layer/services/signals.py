@@ -8,7 +8,10 @@ from typing import Literal
 
 import pandas as pd
 
+from signal_layer.models import predict_asof
 from signal_layer.services.rates import RateQuote, RateService
+
+SignalStrategy = Literal["baseline", "ridge"]
 
 
 class InsufficientHistoryError(ValueError):
@@ -22,8 +25,11 @@ class SignalEvaluation:
     currency: str
     as_of: date
     quote: RateQuote
+    strategy: SignalStrategy
     reference_observations: int
     favourable_percentile: float
+    predicted_advantage_bps: float | None
+    training_observations: int | None
     decision: Literal["candidate", "hold"]
     reason: str
     message: str | None
@@ -47,7 +53,13 @@ class SignalService:
         self._lookback_observations = lookback_observations
         self._candidate_percentile = candidate_percentile
 
-    def evaluate(self, currency: str, as_of: date) -> SignalEvaluation:
+    def evaluate(
+        self,
+        currency: str,
+        as_of: date,
+        *,
+        strategy: SignalStrategy = "baseline",
+    ) -> SignalEvaluation:
         """Compare the latest available quote against prior available quotes.
 
         The comparison set ends strictly before the current quote. Thus neither
@@ -67,12 +79,32 @@ class SignalService:
             )
 
         favourable_percentile = float((reference["rub_per_unit"] > quote.rub_per_unit).mean() * 100)
-        is_candidate = favourable_percentile >= self._candidate_percentile
+        predicted_advantage_bps = None
+        training_observations = None
+        if strategy == "ridge":
+            context_currencies = [quote.currency]
+            if quote.currency != "USD":
+                context_currencies.append("USD")
+            panel = self._rate_service.panel_asof(context_currencies, as_of)
+            try:
+                prediction = predict_asof(panel, quote.currency, as_of)
+            except ValueError as error:
+                raise InsufficientHistoryError(str(error)) from error
+            predicted_advantage_bps = prediction.predicted_advantage_bps
+            training_observations = prediction.training_observations
+            is_candidate = (
+                predicted_advantage_bps > 0
+                and favourable_percentile >= self._candidate_percentile
+            )
+        else:
+            is_candidate = favourable_percentile >= self._candidate_percentile
         rounded_percentile = round(favourable_percentile)
         reason = (
             f"Current rate is lower than {rounded_percentile}% of the preceding "
             f"{self._lookback_observations} available quotes"
         )
+        if predicted_advantage_bps is not None:
+            reason = f"Ridge score is {predicted_advantage_bps:.1f} bps; {reason.lower()}"
         message = None
         if is_candidate:
             message = (
@@ -84,8 +116,11 @@ class SignalService:
             currency=quote.currency,
             as_of=as_of,
             quote=quote,
+            strategy=strategy,
             reference_observations=len(reference),
             favourable_percentile=favourable_percentile,
+            predicted_advantage_bps=predicted_advantage_bps,
+            training_observations=training_observations,
             decision="candidate" if is_candidate else "hold",
             reason=reason,
             message=message,
