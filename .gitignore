@@ -5,3 +5,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# uv lockfile (project uses poetry) - keep local
+uv.lock
+reports/
+*.csv.bak
