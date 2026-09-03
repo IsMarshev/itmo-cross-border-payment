@@ -8,3 +8,5 @@ __pycache__/
 
 # uv lockfile (project uses poetry) - keep local
 uv.lock
+reports/
+*.csv.bak
