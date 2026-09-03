@@ -33,10 +33,15 @@ from .data import normalization
 from .models import DEFAULT_H, walk_forward_predict
 
 DEFAULT_CORRIDORS = ("TJS", "UZS", "KGS", "AMD", "KZT")
+# Always loaded alongside the requested corridors: USD feeds the cross-currency
+# ``rub_strength`` feature. Without it the feature is NaN for every row and
+# build_dataset's dropna discards the whole sample.
+CONTEXT_CURRENCIES = ("USD",)
 
 
 def _load_panel(corridors: list[str], data_dir: str) -> pd.DataFrame:
-    return normalization.read_rate_directory(data_dir, currencies=corridors)
+    currencies = list({*corridors, *CONTEXT_CURRENCIES})
+    return normalization.read_rate_directory(data_dir, currencies=currencies)
 
 
 def _signals_from_predictions(
@@ -83,7 +88,7 @@ def cmd_train(args: argparse.Namespace) -> None:
     for iso in args.corridors:
         print(f"-> {iso}: walk-forward predict...", end=" ", flush=True)
         pred = walk_forward_predict(
-            panel, iso, h=args.h, alpha=args.alpha, min_train=args.min_train
+            panel, iso, h=args.h, alpha=args.alpha, min_train=args.min_train, model=args.model
         )
         pred.to_csv(os.path.join(args.out, f"predictions_{iso}.csv"), index=False)
 
@@ -96,24 +101,25 @@ def cmd_train(args: argparse.Namespace) -> None:
         all_signals.append(signals)
         print(f"{len(signals)} signals")
 
-        if len(signals):
-            m_df, freq_df = metrics.evaluate(
-                panel, signals, horizons=tuple(args.horizons), eps_bps=args.eps_bps
-            )
-        else:
-            m_df, freq_df = metrics.evaluate(
-                panel, signals[["iso", "signal_date", "rub_per_unit"]],
-                horizons=tuple(args.horizons), eps_bps=args.eps_bps,
-            )
+        m_df, freq_df = metrics.evaluate(
+            panel,
+            signals[["iso", "signal_date", "rub_per_unit"]] if len(signals) else signals,
+            horizons=tuple(args.horizons),
+            eps_bps=args.eps_bps,
+            scenario=args.scenario,
+        )
         m_df.to_csv(os.path.join(args.out, f"metrics_{iso}.csv"), index=False)
         all_metrics.append(m_df)
         all_freq.append(freq_df.assign(source="model"))
 
-    metrics_all = pd.concat(all_metrics, ignore_index=True)
+    metrics_all = pd.concat(all_metrics, ignore_index=True) if all_metrics else pd.DataFrame()
     metrics_all.to_csv(os.path.join(args.out, "metrics_all.csv"), index=False)
-    freq_all = pd.concat(all_freq, ignore_index=True)
+    freq_all = pd.concat(all_freq, ignore_index=True) if all_freq else pd.DataFrame()
     freq_all.to_csv(os.path.join(args.out, "frequency_all.csv"), index=False)
     print(f"\nMetrics -> {args.out}/metrics_all.csv")
+    if metrics_all.empty or "iso" not in metrics_all.columns:
+        print("No metrics produced (all corridors empty).")
+        return
     summary = metrics_all.groupby("iso")[["hit_rate", "lift", "advantage_bps"]].mean().round(3)
     print(summary.to_string())
 
@@ -126,7 +132,8 @@ def cmd_asof(args: argparse.Namespace) -> None:
         print(f"No data available on {args.date} for {args.corridor}")
         return
     pred = walk_forward_predict(
-        panel, args.corridor, h=args.h, alpha=args.alpha, min_train=args.min_train
+        panel, args.corridor, h=args.h, alpha=args.alpha,
+        min_train=args.min_train, model=args.model,
     )
     row = pred[pred["quote_date"] <= asof].sort_values("quote_date").iloc[-1]
     signals = _signals_from_predictions(pred, slots_per_week=args.slots_per_week)
@@ -147,6 +154,14 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--alpha", type=float, default=1.0)
         sp.add_argument("--min-train", type=int, default=500)
         sp.add_argument("--slots-per-week", type=float, default=1.5)
+        sp.add_argument(
+            "--model", choices=("ridge", "catboost"), default="ridge",
+            help="Estimator: ridge (default) or catboost (GBDT challenger)",
+        )
+        sp.add_argument(
+            "--scenario", choices=metrics.SCENARIOS, default=metrics.DEFAULT_SCENARIO,
+            help="Hit rule: window_closing (advantage>0) or favourable_now",
+        )
 
     pt = sub.add_parser("train", help="Walk-forward train + evaluate")
     pt.add_argument("--corridors", nargs="+", default=list(DEFAULT_CORRIDORS))

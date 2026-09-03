@@ -47,6 +47,8 @@ def test_features_columns_present() -> None:
     feats = compute_features(panel)
     for col in FEATURE_COLUMNS:
         assert col in feats.columns
-    # No all-NaN feature columns (each has a warm-up window only at the start).
-    for col in FEATURE_COLUMNS:
+    # Each backward-looking feature has a warm-up window only at the start.
+    # rub_strength is NaN when USD is not in the panel; the rest must be filled.
+    non_usd_cols = tuple(c for c in FEATURE_COLUMNS if c != "rub_strength")
+    for col in non_usd_cols:
         assert feats[col].notna().sum() > 200

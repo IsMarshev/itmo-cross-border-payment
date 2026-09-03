@@ -33,6 +33,17 @@ import pandas as pd
 # Default evaluation horizons, in trading observations, as required by the brief.
 HORIZONS: tuple[int, ...] = (1, 3, 5, 10, 20)
 
+# Two message scenarios from the brief. The hit rule is scenario-specific:
+#   "favourable now"  -> rate stays no worse (does not rise above) for h days.
+#   "window closing"  -> the median future rate rises above the signal-day level
+#                        by h days (the favourable low closes). Median — not
+#                        "any day above" — matches the model target advantage =
+#                        median(future) - rate and keeps lift informative.
+# advantage > 0 ("cheap now, dearer later") corresponds to "window closing":
+# we tell the client to transfer now because the favourable low will not hold.
+SCENARIOS = ("favourable_now", "window_closing")
+DEFAULT_SCENARIO = "window_closing"
+
 
 @dataclass(frozen=True)
 class SignalOutcome:
@@ -97,17 +108,38 @@ def build_outcomes(
     return outcomes
 
 
+def _held(
+    future: np.ndarray, rate: float, eps_bps: float, scenario: str
+) -> bool:
+    """Did this signal's message hold on its realised future path?
+
+    ``favourable_now``: rate stays no worse — never rises above the signal-day
+    level by more than ``eps_bps`` within the horizon.
+    ``window_closing``: the favourable low closes — the typical (median) future
+    rate rises above the signal-day level by more than ``eps_bps``. Using the
+    median (not "any day above") matches the model target ``advantage =
+    median(future) - rate`` and keeps the random-day baseline near 0.5, so lift
+    is informative rather than capped near 1.1 by a trivially-satisfied rule.
+    """
+    thr = rate * (1 + eps_bps / 10_000.0)
+    if scenario == "favourable_now":
+        return bool(np.all(future <= thr + 1e-12))
+    if scenario == "window_closing":
+        return bool(np.median(future) > thr + 1e-12)
+    raise ValueError(f"Unknown scenario {scenario!r}; expected one of {SCENARIOS}")
+
+
 def _hit_mask(
     index: dict[str, CorridorIndex],
     signals: pd.DataFrame,
     h: int,
     eps_bps: float,
+    scenario: str = DEFAULT_SCENARIO,
 ) -> np.ndarray:
-    """Boolean vector: True where a signal's rate held for ``h`` observations.
+    """Boolean vector: True where a signal's message held for ``h`` observations.
 
-    A signal holds when the rate never rises above the signal-day level by more
-    than ``eps_bps`` basis points within the horizon. Signals with no future at
-    all are counted as failures (False). Vectorial over a corridor's index.
+    Signals with no future at all are counted as failures (False). Vectorial
+    over a corridor's index.
     """
     sig = signals.reset_index(drop=True)
     mask = np.zeros(len(sig), dtype=bool)
@@ -122,22 +154,22 @@ def _hit_mask(
             future = ci.rates[pos + 1 : pos + 1 + h]
             if len(future) == 0:
                 continue
-            thr = float(row["rub_per_unit"]) * (1 + eps_bps / 10_000.0)
-            if np.all(future <= thr + 1e-12):
+            if _held(future, float(row["rub_per_unit"]), eps_bps, scenario):
                 mask[grp.index[i]] = True
     return mask
 
 
-def hit_rate(outcomes: list[SignalOutcome], eps_bps: float = 0.0) -> float:
-    """Share of "favourable now" signals that held on their horizon."""
+def hit_rate(
+    outcomes: list[SignalOutcome], eps_bps: float = 0.0, scenario: str = DEFAULT_SCENARIO
+) -> float:
+    """Share of signals whose message held on their horizon (scenario-specific)."""
     if not outcomes:
         return float("nan")
     hits = 0
     for o in outcomes:
         if len(o.future) == 0:
             continue
-        thr = o.rate * (1 + eps_bps / 10_000.0)
-        if np.all(o.future <= thr + 1e-12):
+        if _held(o.future, o.rate, eps_bps, scenario):
             hits += 1
     return hits / len(outcomes)
 
@@ -187,6 +219,7 @@ def lift_over_random(
     eps_bps: float = 0.0,
     n_random_trials: int = 200,
     seed: int = 0,
+    scenario: str = DEFAULT_SCENARIO,
 ) -> float:
     """Signal hit rate divided by the hit rate of a random day, matched per corridor.
 
@@ -194,12 +227,12 @@ def lift_over_random(
     Target is a stable lift >= 1.3 across corridors and out-of-time windows.
 
     Random baselines draw, per corridor, as many random trading days as the
-    model signalled, and score them with the same horizon/eps rule. The index
-    is precomputed once; trials only resample positions and check ``rates``.
+    model signalled, and score them with the same horizon/eps/scenario rule.
+    The index is precomputed once; trials only resample positions and check rates.
     """
     if signals.empty:
         return float("nan")
-    model_mask = _hit_mask(index, signals, h, eps_bps)
+    model_mask = _hit_mask(index, signals, h, eps_bps, scenario)
     model_hit = float(model_mask.mean())
     if np.isnan(model_hit):
         return float("nan")
@@ -230,8 +263,7 @@ def lift_over_random(
                 if len(future) == 0:
                     continue
                 total_n += 1
-                thr = ci.rates[pos] * (1 + eps_bps / 10_000.0)
-                if np.all(future <= thr + 1e-12):
+                if _held(future, ci.rates[pos], eps_bps, scenario):
                     total_hits += 1
         if total_n > 0:
             rand_hits.append(total_hits / total_n)
@@ -289,6 +321,7 @@ def evaluate(
     horizons: tuple[int, ...] = HORIZONS,
     eps_bps: float = 0.0,
     total_days: int | None = None,
+    scenario: str = DEFAULT_SCENARIO,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Compute the full metric matrix: corridor x metric x horizon.
 
@@ -303,10 +336,10 @@ def evaluate(
         total_days = panel["quote_date"].nunique()
     for iso, sig_grp in signals.groupby("iso", sort=False):
         for h in horizons:
-            hr = hit_rate(build_outcomes(panel, sig_grp, h), eps_bps=eps_bps)
+            hr = hit_rate(build_outcomes(panel, sig_grp, h), eps_bps=eps_bps, scenario=scenario)
             adv_mean, adv_se, n = advantage_bps(index, sig_grp, h)
             tstat = adv_mean / adv_se if adv_se and not np.isnan(adv_se) else float("nan")
-            lf = lift_over_random(index, sig_grp, h, eps_bps=eps_bps)
+            lf = lift_over_random(index, sig_grp, h, eps_bps=eps_bps, scenario=scenario)
             rows.append(
                 {
                     "iso": iso,

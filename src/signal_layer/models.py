@@ -94,6 +94,31 @@ def build_dataset(
     return df
 
 
+def _walk_forward(
+    X: np.ndarray,
+    y: np.ndarray,
+    dates: np.ndarray,
+    iso: str,
+    rates: np.ndarray,
+    min_train: int,
+    fit_fn,
+) -> pd.DataFrame:
+    """Generic expanding-window walk-forward. ``fit_fn(X_tr, y_tr) -> predict_fn``."""
+    preds = np.full(len(X), np.nan)
+    for i in range(min_train, len(X)):
+        predict_fn = fit_fn(X[:i], y[:i])
+        preds[i] = float(predict_fn(X[i : i + 1])[0])
+    return pd.DataFrame(
+        {
+            "quote_date": dates,
+            "iso": iso,
+            "rub_per_unit": rates,
+            "advantage": y,
+            "pred_advantage": preds,
+        }
+    ).dropna(subset=["pred_advantage"])
+
+
 def walk_forward_predict(
     panel: pd.DataFrame,
     iso: str,
@@ -101,12 +126,19 @@ def walk_forward_predict(
     min_train: int = 500,
     h: int = DEFAULT_H,
     alpha: float = 1.0,
+    model: str = "ridge",
+    catboost_iters: int = 300,
+    catboost_depth: int = 3,
 ) -> pd.DataFrame:
     """Expanding-window walk-forward prediction of advantage for one corridor.
 
     For each date ``T`` from the ``min_train``-th observation onward, fit on all
     data *before* ``T`` (target uses future up to ``T-1``'s horizon, which is in
     the past relative to ``T``) and predict the advantage at ``T``.
+
+    ``model`` selects the estimator: ``"ridge"`` (default) or ``"catboost"``.
+    CatBoost is the GBDT challenger with strict complexity limits (shallow depth,
+    capped iterations) per implementation_plan.md Stage 5.
 
     Returns a frame with ``quote_date, iso, rub_per_unit, advantage (actual),
     pred_advantage`` — the raw model output. Thresholding into signals happens
@@ -115,11 +147,30 @@ def walk_forward_predict(
     df = build_dataset(panel, iso, h=h)
     X = df[list(FEATURE_COLUMNS)].to_numpy(dtype=float)
     y = df["advantage"].to_numpy(dtype=float)
-    preds = np.full(len(df), np.nan)
-    for i in range(min_train, len(df)):
-        model = RidgeModel(alpha=alpha).fit(X[:i], y[:i])
-        preds[i] = float(model.predict(X[i : i + 1])[0])
-    df = df.assign(pred_advantage=preds)
-    return df[
-        ["quote_date", "iso", "rub_per_unit", "advantage", "pred_advantage"]
-    ].dropna(subset=["pred_advantage"])
+    dates = df["quote_date"].to_numpy()
+    rates = df["rub_per_unit"].to_numpy(dtype=float)
+
+    if model == "ridge":
+        def fit_fn(X_tr, y_tr):
+            m = RidgeModel(alpha=alpha).fit(X_tr, y_tr)
+            return m.predict
+        return _walk_forward(X, y, dates, iso, rates, min_train, fit_fn)
+
+    if model == "catboost":
+        from catboost import CatBoostRegressor
+
+        def fit_fn(X_tr, y_tr):
+            m = CatBoostRegressor(
+                iterations=catboost_iters,
+                depth=catboost_depth,
+                learning_rate=0.05,
+                l2_leaf_reg=3.0,
+                random_seed=0,
+                verbose=False,
+                allow_writing_files=False,
+            )
+            m.fit(X_tr, y_tr)
+            return m.predict
+        return _walk_forward(X, y, dates, iso, rates, min_train, fit_fn)
+
+    raise ValueError(f"Unknown model {model!r}; expected 'ridge' or 'catboost'")

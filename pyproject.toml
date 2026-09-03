@@ -9,6 +9,7 @@ dependencies = [
     "pandas>=2.2,<3.0",
     "numpy>=2.0,<3.0",
     "requests>=2.31,<3.0",
+    "catboost>=1.2.10",
 ]
 
 [tool.poetry]
