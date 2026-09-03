@@ -13,6 +13,18 @@ poetry run pytest
 poetry run ruff check .
 ```
 
+## Minimal API
+
+```bash
+poetry run uvicorn signal_layer.api.app:app --reload
+```
+
+The service exposes `GET /health`, `GET /v1/rates/{ISO}/latest` and
+`GET /v1/signals/{ISO}/evaluate`. The signal endpoint is a deterministic,
+fact-only baseline: it returns a *candidate* for communication when the current
+available rate is low relative to its trailing history. It does not deliver a
+push, retain customer data or claim to forecast a future exchange rate.
+
 ## Rate data contract
 
 Input files are named `currency_data/rates_<ISO>.csv` and must contain:
