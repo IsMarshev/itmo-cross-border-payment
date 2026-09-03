@@ -1,336 +1,357 @@
-# ruff: noqa: E501
-"""Self-contained HTML dashboard generated from a Stage-4 backtest report."""
+"""Offline HTML dashboard (Plotly): visualise signals and replay strategies.
+
+Generates a single self-contained ``.html`` file (Plotly embedded, no network)
+that for each corridor shows, over the trailing year:
+
+* the rate history with a zoomable/scalable plot;
+* buy markers for three strategies on the same budget — model (green), DCA
+  (yellow, fixed cadence), random (red) — so the timing of each is visible;
+* how much currency each strategy bought for the same monthly budget, with
+  uplift vs DCA and vs random;
+* hit-rate of model signals at h=5 and h=15 days (did the rate rise by then).
+
+Business scenario: a client in RF transfers money home to CIS 1–3 times a
+month on a fixed monthly budget. The signal layer's job is to pick the best
+days within a 5–15 day horizon. All strategies spend the same total roubles;
+only the timing differs.
+
+Usage::
+
+    uv run python -m signal_layer.dashboard \
+        --corridors USD TJS UZS KGS AMD KZT \
+        --monthly-budget 50000 --cadence-days 5 \
+        --out reports/dashboard.html
+"""
 
 from __future__ import annotations
 
 import argparse
-import html
-from pathlib import Path
+import os
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 
-SUMMARY_FILE = "summary.json"
-DECISION_LOG_FILE = "decision_log.jsonl"
-DEFAULT_DASHBOARD_FILE = "dashboard.html"
+from . import models, simulation
+from .run_m0 import DEFAULT_CORRIDORS, _load_panel, _signals_from_predictions
+
+# USD is included by default so the user can sanity-check the chart against a
+# corridor they know intuitively.
+DASHBOARD_CORRIDORS = ("USD", *DEFAULT_CORRIDORS)
 
 
-def generate_dashboard(
-    report_dir: str | Path,
-    *,
-    output_path: str | Path | None = None,
-) -> Path:
-    """Build an interactive, standalone dashboard from one backtest run.
+def _model_hit_rate_at_h(rates: np.ndarray, sig_pos: np.ndarray, h: int) -> float:
+    """Share of model signals after which the median future rate rose by h days."""
+    if len(sig_pos) == 0:
+        return float("nan")
+    hits = 0
+    for p in sig_pos:
+        future = rates[p + 1 : p + 1 + h]
+        if len(future) == 0:
+            continue
+        if np.median(future) > rates[p]:
+            hits += 1
+    return hits / len(sig_pos)
 
-    The dashboard deliberately does not load ``random_baseline.jsonl``: it can
-    be very large, while the matched-baseline aggregates needed for comparison
-    are already persisted in ``summary.json``.
+
+def _build_corridor_data(
+    panel: pd.DataFrame,
+    iso: str,
+    signals: pd.DataFrame,
+    res: dict[str, simulation.StrategyResult],
+    start: pd.Timestamp,
+) -> dict:
+    """Assemble the data bundle one corridor needs for the Plotly figure.
+
+    The chart line and markers are filtered to ``[start, last]`` (the trailing
+    year) so the Y-axis auto-fits that window instead of being flattened by the
+    full 2000-onward history. Hit rates use the *full* series because they need
+    future observations past the window's end.
     """
-    source_dir = Path(report_dir)
-    summary_path = source_dir / SUMMARY_FILE
-    decisions_path = source_dir / DECISION_LOG_FILE
-    if not summary_path.is_file():
-        raise FileNotFoundError(f"Backtest summary does not exist: {summary_path}")
-    if not decisions_path.is_file():
-        raise FileNotFoundError(f"Decision log does not exist: {decisions_path}")
+    full = panel[panel["iso"] == iso].sort_values("quote_date").reset_index(drop=True)
+    full_dates = pd.to_datetime(full["quote_date"])
+    full_rates = full["rub_per_unit"].to_numpy(dtype=float)
 
-    summary = pd.read_json(summary_path)
-    decisions = pd.read_json(decisions_path, lines=True)
-    output = Path(output_path) if output_path is not None else source_dir / DEFAULT_DASHBOARD_FILE
-    output.parent.mkdir(parents=True, exist_ok=True)
+    # Hit rate over the full series (needs future data).
+    sig_set = set(pd.Timestamp(d) for d in signals["signal_date"]) if len(signals) else set()
+    full_sig_pos = np.where(full_dates.isin(sig_set).to_numpy())[0]
 
-    dashboard_html = _render_document(summary, decisions)
-    output.write_text(dashboard_html, encoding="utf-8")
-    return output
+    # Chart data: trailing year only.
+    win = full[full["quote_date"] >= start].reset_index(drop=True)
+    dates = pd.to_datetime(win["quote_date"])
+    rates = win["rub_per_unit"].to_numpy(dtype=float)
+
+    def _date_idx(arr: np.ndarray) -> np.ndarray:
+        out = []
+        for d in arr:
+            i = np.searchsorted(dates.to_numpy(), np.datetime64(pd.Timestamp(d)))
+            if i < len(dates):
+                out.append(i)
+        return np.array(out, dtype=int)
+
+    m_pos = _date_idx(res["model"].buy_dates) if len(res["model"].buy_dates) else np.array([], dtype=int)
+    d_pos = _date_idx(res["dca"].buy_dates) if len(res["dca"].buy_dates) else np.array([], dtype=int)
+    r_pos = _date_idx(res["random"].buy_dates) if len(res["random"].buy_dates) else np.array([], dtype=int)
+
+    return {
+        "iso": iso,
+        "dates": dates.dt.strftime("%Y-%m-%d").to_list(),
+        "rates": rates.tolist(),
+        "model_pos": m_pos.tolist(),
+        "dca_pos": d_pos.tolist(),
+        "random_pos": r_pos.tolist(),
+        "strategies": {
+            k: {
+                "name": v.name,
+                "n_buys": v.n_buys,
+                "currency": v.total_currency,
+                "avg_rate": v.avg_rate if v.avg_rate == v.avg_rate else 0.0,
+                "total_rub": v.total_rub,
+            }
+            for k, v in res.items()
+        },
+        "hit_rate_h5": _model_hit_rate_at_h(full_rates, full_sig_pos, 5),
+        "hit_rate_h15": _model_hit_rate_at_h(full_rates, full_sig_pos, 15),
+        "n_signals": int(len(full_sig_pos)),
+    }
 
 
-def _render_document(summary: pd.DataFrame, decisions: pd.DataFrame) -> str:
-    corridor_summary = summary.loc[summary["iso"].ne("ALL")].copy()
-    aggregate = summary.loc[summary["iso"].eq("ALL")]
-    aggregate_row = aggregate.iloc[0] if not aggregate.empty else pd.Series(dtype=object)
-    selected = decisions.loc[
-        decisions["decision"].astype(bool) & decisions["outcome_complete"].astype(bool)
-    ].copy()
-    selected["decision_date"] = pd.to_datetime(selected["decision_date"])
+def build_dashboard(
+    panel: pd.DataFrame,
+    corridors: list[str],
+    *,
+    monthly_budget: float = 50_000.0,
+    cadence_days: int = 5,
+    slots_per_week: float = 1.5,
+    h: int = 20,
+    out_path: str = "reports/dashboard.html",
+) -> None:
+    """Generate the Plotly HTML dashboard for a set of corridors (trailing year)."""
+    last = panel["quote_date"].max()
+    start = last - pd.DateOffset(years=1)
 
-    figures = [
-        _advantage_figure(corridor_summary),
-        _risk_figure(corridor_summary),
-        _volume_figure(selected),
-        _distribution_figure(selected),
-    ]
-    fragments = [
-        figure.to_html(
-            full_html=False,
-            include_plotlyjs=True if index == 0 else False,
-            config={"responsive": True, "displaylogo": False},
+    corridor_data = []
+    for iso in corridors:
+        print(f"-> {iso}: walk-forward + signals...", end=" ", flush=True)
+        pred = models.walk_forward_predict(panel, iso, h=h, alpha=1.0, min_train=500)
+        signals = _signals_from_predictions(pred, slots_per_week=slots_per_week)
+        if len(signals):
+            rmap = panel[panel["iso"] == iso].set_index("quote_date")["rub_per_unit"]
+            signals["rub_per_unit"] = signals["signal_date"].map(rmap).astype(float)
+        res = simulation.simulate_strategies(
+            panel, iso, signals, monthly_budget=monthly_budget, cadence_days=cadence_days,
+            start=start, end=last,
         )
-        for index, figure in enumerate(figures)
-    ]
-    table = _summary_table(corridor_summary)
-    cards = _kpi_cards(aggregate_row)
-    selected_table = _recent_signals_table(selected)
+        corridor_data.append(_build_corridor_data(panel, iso, signals, res, start))
+        print(f"{len(signals)} signals")
+
+    html = _render_html(corridor_data, monthly_budget=monthly_budget)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"\nDashboard -> {out_path}")
+
+
+def _render_html(corridor_data: list[dict], *, monthly_budget: float) -> str:
+    """Render the self-contained HTML with Plotly figures per corridor."""
+    from plotly.io import to_html
+
+    # Embed plotly.js inline once (first figure), reuse it for the rest so the
+    # file is fully offline but not bloated by N copies of the library.
+    figs_html = []
+    for i, cd in enumerate(corridor_data):
+        fig = _make_figure(cd)
+        include = "inline" if i == 0 else False
+        figs_html.append(
+            to_html(
+                fig, include_plotlyjs=include, full_html=False, div_id=f"plot_{cd['iso']}",
+            )
+        )
+    body = "\n".join(figs_html)
+    summary_html = _summary_table(corridor_data, monthly_budget)
 
     return f"""<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Сигнальный слой — отчёт бэктеста</title>
-  <style>
-    :root {{ color-scheme: light; font-family: Inter, Arial, sans-serif; color: #172033; background: #f6f8fc; }}
-    body {{ margin: 0; }}
-    main {{ max-width: 1440px; margin: 0 auto; padding: 36px 24px 56px; }}
-    h1 {{ margin: 0 0 8px; font-size: 30px; }}
-    h2 {{ margin: 34px 0 14px; font-size: 20px; }}
-    .subtitle {{ margin: 0; color: #586174; max-width: 900px; line-height: 1.5; }}
-    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 24px; }}
-    .card, .panel {{ background: white; border: 1px solid #e2e7f0; border-radius: 14px; box-shadow: 0 2px 8px #1720330a; }}
-    .card {{ padding: 18px; }}
-    .card-label {{ color: #6c7585; font-size: 13px; }}
-    .card-value {{ font-size: 25px; font-weight: 700; margin-top: 7px; }}
-    .card-note {{ color: #6c7585; font-size: 12px; margin-top: 7px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 18px; }}
-    .panel {{ padding: 6px; overflow-x: auto; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 13px; background: white; }}
-    th, td {{ padding: 10px 12px; text-align: right; border-bottom: 1px solid #edf0f5; white-space: nowrap; }}
-    th {{ color: #5f6877; background: #f9fafc; font-weight: 600; }}
-    th:first-child, td:first-child {{ text-align: left; }}
-    .note {{ color: #6c7585; font-size: 13px; line-height: 1.5; margin-top: 14px; }}
-    .plotly-graph-div {{ min-height: 380px; }}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Сигнальный слой: бэктест</h1>
-    <p class="subtitle">Историческая оценка политики под коммуникационным бюджетом. Положительный advantage означает, что курс в день сигнала был выгоднее медианного курса следующих H наблюдений. Это оценка качества тайминга, а не доказательство влияния пуша на конверсию.</p>
-    <section class="cards">{cards}</section>
-    <h2>Польза и matched random baseline</h2>
-    <section class="grid"><div class="panel">{fragments[0]}</div><div class="panel">{fragments[1]}</div></section>
-    <h2>Динамика и распределение исходов</h2>
-    <section class="grid"><div class="panel">{fragments[2]}</div><div class="panel">{fragments[3]}</div></section>
-    <h2>Сводка по коридорам</h2>
-    <section class="panel">{table}</section>
-    <h2>Последние отобранные сигналы</h2>
-    <section class="panel">{selected_table}</section>
-    <p class="note">CI — 95% moving-block bootstrap. Random baseline выбирает то же число доступных дат в каждом коридоре и коммуникационном окне. Дашборд не загружает массивный random-log: использует его агрегаты из summary.json.</p>
-  </main>
-</body>
-</html>"""
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cross-border signal dashboard</title>
+<style>
+  :root {{ --bg:#0f1115; --panel:#171a21; --ink:#e6e8eb; --dim:#8b929d;
+          --accent:#5b9dff; --green:#3fb950; --red:#f85149; --amber:#e3b341;
+          --grid:#262b33; }}
+  * {{ box-sizing:border-box; }}
+  body {{ margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }}
+  header {{ padding:18px 22px; border-bottom:1px solid var(--grid); }}
+  header h1 {{ margin:0 0 4px; font-size:18px; font-weight:600; }}
+  header p {{ margin:0; color:var(--dim); font-size:13px; }}
+  main {{ padding:18px 22px; max-width:1200px; margin:0 auto; }}
+  .corridor {{ margin-bottom:30px; }}
+  .corr-title {{ font-size:16px; font-weight:600; margin-bottom:8px; }}
+  .stats {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+           gap:10px; margin:12px 0; }}
+  .card {{ background:var(--panel); border:1px solid var(--grid); border-radius:10px; padding:12px; }}
+  .card h3 {{ margin:0 0 4px; font-size:12px; color:var(--dim); font-weight:500; }}
+  .card .big {{ font-size:20px; font-weight:600; }}
+  .card .sub {{ font-size:11px; color:var(--dim); }}
+  .pos {{ color:var(--green); }} .neg {{ color:var(--red); }} .neu {{ color:var(--amber); }}
+  table {{ width:100%; border-collapse:collapse; margin:10px 0; font-size:13px; }}
+  th, td {{ padding:6px 9px; text-align:right; border-bottom:1px solid var(--grid); }}
+  th:first-child, td:first-child {{ text-align:left; }}
+  th {{ color:var(--dim); font-weight:500; }}
+  .summary {{ background:var(--panel); border:1px solid var(--grid); border-radius:10px;
+              padding:16px; margin-bottom:24px; }}
+  .summary h2 {{ margin:0 0 10px; font-size:15px; }}
+  .hint {{ color:var(--dim); font-size:12px; margin-top:8px; }}
+</style></head><body>
+<header>
+  <h1>Сигнальный слой трансграничных переводов — Ridge m0</h1>
+  <p>Курс валюты получателя в рублях (меньше = выгоднее). Зум — колесо мыши, а
+     перетаскивание рамки zoom по обеим осям (двойной клик — сброс). Точки — дни покупок:
+     <span style="color:var(--green)">●</span> модель,
+     <span style="color:var(--amber)">●</span> DCA (раз в неделю),
+     <span style="color:var(--red)">●</span> случайные дни. Окно — последний год.</p>
+</header>
+<main>
+{summary_html}
+{body}
+</main>
+</body></html>
+"""
 
 
-def _advantage_figure(summary: pd.DataFrame) -> go.Figure:
-    figure = go.Figure()
-    if summary.empty:
-        return _empty_figure("Сравнение advantage", "Нет данных для отображения")
-    figure.add_bar(
-        name="Политика",
-        x=summary["iso"],
-        y=summary["mean_advantage_bps"],
-        error_y={
-            "type": "data",
-            "symmetric": False,
-            "array": (summary["advantage_ci_high"] - summary["mean_advantage_bps"]),
-            "arrayminus": (summary["mean_advantage_bps"] - summary["advantage_ci_low"]),
-        },
-        marker_color="#2563eb",
-    )
-    figure.add_bar(
-        name="Matched random",
-        x=summary["iso"],
-        y=summary["random_mean_advantage_bps"],
-        marker_color="#94a3b8",
-    )
-    figure.update_layout(
-        title="Средняя выгода на сигнал, б.п.",
-        barmode="group",
-        yaxis_title="б.п.",
-        legend_title_text="",
-        margin={"l": 55, "r": 25, "t": 55, "b": 40},
-    )
-    return figure
-
-
-def _risk_figure(summary: pd.DataFrame) -> go.Figure:
-    if summary.empty:
-        return _empty_figure("Риск ранней отправки", "Нет данных для отображения")
-    figure = px.scatter(
-        summary,
-        x="early_send_rate",
-        y="mean_advantage_bps",
-        size="n_signals",
-        color="iso",
-        text="iso",
-        hover_data=["p90_regret_bps", "hit_rate", "advantage_delta_bps"],
-        labels={
-            "early_send_rate": "Риск ранней отправки",
-            "mean_advantage_bps": "Средняя выгода, б.п.",
-            "n_signals": "Сигналов",
-        },
-        title="Польза против риска",
-    )
-    figure.add_hline(y=0, line_dash="dot", line_color="#64748b")
-    figure.update_traces(textposition="top center")
-    figure.update_layout(margin={"l": 55, "r": 25, "t": 55, "b": 40}, showlegend=False)
-    return figure
-
-
-def _volume_figure(selected: pd.DataFrame) -> go.Figure:
-    if selected.empty:
-        return _empty_figure("Частота сигналов", "Нет отобранных сигналов")
-    monthly = (
-        selected.assign(month=selected["decision_date"].dt.to_period("M").dt.to_timestamp())
-        .groupby(["month", "iso"], as_index=False)
-        .size()
-        .rename(columns={"size": "signals"})
-    )
-    figure = px.line(
-        monthly,
-        x="month",
-        y="signals",
-        color="iso",
-        labels={"month": "Месяц", "signals": "Сигналов"},
-        title="Частота отобранных сигналов по месяцам",
-    )
-    figure.update_layout(margin={"l": 55, "r": 25, "t": 55, "b": 40})
-    return figure
-
-
-def _distribution_figure(selected: pd.DataFrame) -> go.Figure:
-    if selected.empty:
-        return _empty_figure("Распределение advantage", "Нет отобранных сигналов")
-    figure = px.box(
-        selected,
-        x="iso",
-        y="advantage_bps",
-        color="iso",
-        points="outliers",
-        labels={"iso": "Коридор", "advantage_bps": "Выгода, б.п."},
-        title="Распределение исхода на сигнал",
-    )
-    figure.add_hline(y=0, line_dash="dot", line_color="#64748b")
-    figure.update_layout(margin={"l": 55, "r": 25, "t": 55, "b": 40}, showlegend=False)
-    return figure
-
-
-def _empty_figure(title: str, annotation: str) -> go.Figure:
-    figure = go.Figure()
-    figure.add_annotation(text=annotation, showarrow=False, font={"size": 16})
-    figure.update_layout(title=title, xaxis={"visible": False}, yaxis={"visible": False})
-    return figure
-
-
-def _kpi_cards(row: pd.Series) -> str:
-    cards = [
-        ("Отобрано сигналов", _format_number(row.get("n_signals"), digits=0), "полный период"),
-        (
-            "Средняя выгода",
-            _format_bps(row.get("mean_advantage_bps")),
-            "на один сигнал",
-        ),
-        (
-            "95% CI выгоды",
-            f"{_format_bps(row.get('advantage_ci_low'))} … {_format_bps(row.get('advantage_ci_high'))}",
-            "moving-block bootstrap",
-        ),
-        ("Риск ранней отправки", _format_percent(row.get("early_send_rate")), "ниже ε в горизонте H"),
-        ("Hit-rate lift", _format_number(row.get("hit_rate_lift"), digits=2), "против matched random"),
-    ]
-    return "".join(
-        "<article class=\"card\">"
-        f"<div class=\"card-label\">{html.escape(label)}</div>"
-        f"<div class=\"card-value\">{html.escape(value)}</div>"
-        f"<div class=\"card-note\">{html.escape(note)}</div>"
-        "</article>"
-        for label, value, note in cards
-    )
-
-
-def _summary_table(summary: pd.DataFrame) -> str:
-    columns = [
-        ("iso", "Коридор", lambda value: str(value)),
-        ("n_signals", "Сигналов", lambda value: _format_number(value, digits=0)),
-        ("mean_advantage_bps", "Advantage", _format_bps),
-        ("advantage_delta_bps", "Δ к random", _format_bps),
-        ("hit_rate_lift", "Hit lift", lambda value: _format_number(value, digits=2)),
-        ("early_send_rate", "Ранняя отправка", _format_percent),
-        ("p90_regret_bps", "p90 regret", _format_bps),
-        ("per_week", "В неделю", lambda value: _format_number(value, digits=2)),
-    ]
-    header = "".join(f"<th>{html.escape(label)}</th>" for _, label, _ in columns)
+def _summary_table(corridor_data: list[dict], monthly_budget: float) -> str:
+    """Cross-corridor summary table: currency bought + uplift + hit rates."""
     rows = []
-    for _, row in summary.iterrows():
-        values = "".join(
-            f"<td>{html.escape(formatter(row.get(column)))}</td>"
-            for column, _, formatter in columns
+    for cd in corridor_data:
+        s = cd["strategies"]
+        m, d, r = s["model"], s["dca"], s["random"]
+        m_dca = (m["currency"] - d["currency"]) / d["currency"] * 100 if d["currency"] else float("nan")
+        m_rand = (m["currency"] - r["currency"]) / r["currency"] * 100 if r["currency"] else float("nan")
+        rows.append(
+            f"""<tr><td>{cd['iso']}</td>
+            <td>{m['n_buys']}</td><td>{d['n_buys']}</td>
+            <td>{m['currency']:,.0f}</td>
+            <td class="{'pos' if m_dca>0 else 'neg'}">{m_dca:+.2f}%</td>
+            <td class="{'pos' if m_rand>0 else 'neg'}">{m_rand:+.2f}%</td>
+            <td>{cd['hit_rate_h5']*100:.0f}%</td>
+            <td>{cd['hit_rate_h15']*100:.0f}%</td></tr>"""
         )
-        rows.append(f"<tr>{values}</tr>")
-    return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    return f"""<div class="summary">
+  <h2>Сводка за последний год — бюджет {monthly_budget:,.0f} ₽/мес на коридор</h2>
+  <table>
+    <tr><th>Коридор</th><th>Покупок (модель)</th><th>Покупок (DCA)</th>
+    <th>Валюты куплено (модель)</th><th>Модель vs DCA</th><th>Модель vs random</th>
+    <th>Попаданий h=5</th><th>Попаданий h=15</th></tr>
+    {''.join(rows)}
+  </table>
+  <div class="hint">Попадания: доля сигналов модели, после которых медиана курса за h дней
+    оказалась выше сигнального дня (дно «закрылось»). Месячный бюджет делится поровну между
+    покупками каждой стратегии — всего потрачено одинаково, отличается только тайминг.</div>
+</div>"""
 
 
-def _recent_signals_table(selected: pd.DataFrame) -> str:
-    if selected.empty:
-        return "<p class=\"note\">Нет отобранных сигналов.</p>"
-    columns = [
-        ("decision_date", "Дата", lambda value: pd.Timestamp(value).date().isoformat()),
-        ("iso", "Коридор", str),
-        ("score", "Score", lambda value: _format_number(value, digits=3)),
-        ("threshold", "Порог", lambda value: _format_number(value, digits=3)),
-        ("advantage_bps", "Advantage", _format_bps),
-        ("regret_bps", "Regret", _format_bps),
-    ]
-    recent = selected.sort_values("decision_date", ascending=False).head(20)
-    header = "".join(f"<th>{html.escape(label)}</th>" for _, label, _ in columns)
-    rows = []
-    for _, row in recent.iterrows():
-        values = "".join(
-            f"<td>{html.escape(formatter(row[column]))}</td>"
-            for column, _, formatter in columns
+def _make_figure(cd: dict) -> go.Figure:
+    """One Plotly figure: rate line + strategy markers + stats annotation."""
+    dates = cd["dates"]
+    rates = cd["rates"]
+    fig = go.Figure()
+
+    # Rate line.
+    fig.add_trace(go.Scatter(
+        x=dates, y=rates, mode="lines", name="Курс",
+        line=dict(color="#5b9dff", width=1.2), hovertemplate="%{x}<br>%{y:.4f} ₽<extra></extra>",
+    ))
+
+    def _marker_trace(pos_list, name, color):
+        if not pos_list:
+            return None
+        xs = [dates[i] for i in pos_list]
+        ys = [rates[i] for i in pos_list]
+        return go.Scatter(
+            x=xs, y=ys, mode="markers", name=name,
+            marker=dict(color=color, size=5, opacity=0.75, line=dict(width=0.5, color="#0f1115")),
+            hovertemplate="%{x}<br>%{y:.4f} ₽<extra>" + name + "</extra>",
         )
-        rows.append(f"<tr>{values}</tr>")
-    return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+    for tr, nm, col in [
+        (_marker_trace(cd["model_pos"], "Модель", "#3fb950"), "Модель", "#3fb950"),
+        (_marker_trace(cd["dca_pos"], "DCA", "#e3b341"), "DCA", "#e3b341"),
+        (_marker_trace(cd["random_pos"], "Random", "#f85149"), "Random", "#f85149"),
+    ]:
+        if tr is not None:
+            fig.add_trace(tr)
+
+    s = cd["strategies"]
+    m, d = s["model"], s["dca"]
+    m_dca = (m["currency"] - d["currency"]) / d["currency"] * 100 if d["currency"] else float("nan")
+
+    fig.update_layout(
+        title=dict(text=f"{cd['iso']} — последний год", font=dict(size=15)),
+        template="plotly_dark",
+        paper_bgcolor="#0f1115", plot_bgcolor="#171a21",
+        font=dict(color="#e6e8eb", size=12),
+        margin=dict(l=50, r=20, t=50, b=40),
+        height=380,
+        dragmode="zoom",  # drag a rectangle to zoom both X and Y; double-click resets
+        legend=dict(orientation="h", y=-0.15),
+        xaxis=dict(
+            rangeslider=dict(visible=True, thickness=0.05),
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label="1м", step="month", stepmode="backward"),
+                    dict(count=3, label="3м", step="month", stepmode="backward"),
+                    dict(count=6, label="6м", step="month", stepmode="backward"),
+                    dict(step="all", label="Всё"),
+                ]
+            ),
+            gridcolor="#262b33",
+        ),
+        yaxis=dict(
+            title="₽ за единицу валюты (меньше = выгоднее)",
+            autorange=True,  # fits the trailing year, not the full history
+            gridcolor="#262b33",
+            fixedrange=False,  # allow vertical box-zoom
+        ),
+        annotations=[dict(
+            x=0.99, y=0.98, xref="paper", yref="paper", showarrow=False, align="right",
+            text=(
+                f"<b>Модель:</b> {m['currency']:,.0f} {cd['iso']} "
+                f"({m['n_buys']} пок.)<br>"
+                f"<b>DCA:</b> {d['currency']:,.0f} ({d['n_buys']} пок.)<br>"
+                f"<b>vs DCA:</b> <b>{'+' if m_dca>=0 else ''}{m_dca:.2f}%</b><br>"
+                f"<b>попадания:</b> h=5 {cd['hit_rate_h5']*100:.0f}%, "
+                f"h=15 {cd['hit_rate_h15']*100:.0f}%"
+            ),
+            bgcolor="rgba(23,26,33,0.85)", bordercolor="#262b33",
+            font=dict(size=11, color="#e6e8eb"),
+        )],
+    )
+    return fig
 
 
-def _format_number(value: object, *, digits: int) -> str:
-    numeric = _to_finite_float(value)
-    if numeric is None:
-        return "—"
-    return f"{numeric:.{digits}f}"
-
-
-def _format_bps(value: object) -> str:
-    numeric = _to_finite_float(value)
-    if numeric is None:
-        return "—"
-    return f"{numeric:+.1f} б.п."
-
-
-def _format_percent(value: object) -> str:
-    numeric = _to_finite_float(value)
-    if numeric is None:
-        return "—"
-    return f"{numeric * 100:.1f}%"
-
-
-def _to_finite_float(value: object) -> float | None:
-    if value is None or pd.isna(value):
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if np.isfinite(numeric) else None
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Offline Plotly signal dashboard")
+    p.add_argument("--corridors", nargs="+", default=list(DASHBOARD_CORRIDORS))
+    p.add_argument("--data-dir", default="currency_data")
+    p.add_argument(
+        "--monthly-budget", type=float, default=50_000.0,
+        help="RUB per calendar month per corridor (total spent = this x months)",
+    )
+    p.add_argument("--cadence-days", type=int, default=5, help="DCA buy every N trading days (5≈weekly)")
+    p.add_argument("--slots-per-week", type=float, default=1.5)
+    p.add_argument("--h", type=int, default=20)
+    p.add_argument("--out", default="reports/dashboard.html")
+    return p
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Generate a static signal-layer dashboard")
-    parser.add_argument("--report-dir", type=Path, default=Path("reports/backtest"))
-    parser.add_argument("--out", type=Path)
-    args = parser.parse_args(argv)
-    output = generate_dashboard(args.report_dir, output_path=args.out)
-    print(f"Dashboard written to {output}")
+    args = build_parser().parse_args(argv)
+    panel = _load_panel(args.corridors, args.data_dir)
+    build_dashboard(
+        panel, args.corridors, monthly_budget=args.monthly_budget,
+        cadence_days=args.cadence_days, slots_per_week=args.slots_per_week,
+        h=args.h, out_path=args.out,
+    )
 
 
 if __name__ == "__main__":

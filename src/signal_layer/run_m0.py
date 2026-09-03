@@ -88,7 +88,7 @@ def cmd_train(args: argparse.Namespace) -> None:
     for iso in args.corridors:
         print(f"-> {iso}: walk-forward predict...", end=" ", flush=True)
         pred = walk_forward_predict(
-            panel, iso, h=args.h, alpha=args.alpha, min_train=args.min_train, model=args.model
+            panel, iso, h=args.h, alpha=args.alpha, min_train=args.min_train
         )
         pred.to_csv(os.path.join(args.out, f"predictions_{iso}.csv"), index=False)
 
@@ -133,7 +133,7 @@ def cmd_asof(args: argparse.Namespace) -> None:
         return
     pred = walk_forward_predict(
         panel, args.corridor, h=args.h, alpha=args.alpha,
-        min_train=args.min_train, model=args.model,
+        min_train=args.min_train,
     )
     row = pred[pred["quote_date"] <= asof].sort_values("quote_date").iloc[-1]
     signals = _signals_from_predictions(pred, slots_per_week=args.slots_per_week)
@@ -154,10 +154,6 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--alpha", type=float, default=1.0)
         sp.add_argument("--min-train", type=int, default=500)
         sp.add_argument("--slots-per-week", type=float, default=1.5)
-        sp.add_argument(
-            "--model", choices=("ridge", "catboost"), default="ridge",
-            help="Estimator: ridge (default) or catboost (GBDT challenger)",
-        )
         sp.add_argument(
             "--scenario", choices=metrics.SCENARIOS, default=metrics.DEFAULT_SCENARIO,
             help="Hit rule: window_closing (advantage>0) or favourable_now",

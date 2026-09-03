@@ -4,7 +4,7 @@ This is the Stage-5 "value head" from implementation_plan.md: a Ridge regression
 predicting the client's advantage (in basis points) of transferring today versus
 the median rate over the next ``H`` observations. Ridge (not OLS) is chosen on
 purpose: the effective sample is small and features are correlated, so
-regularisation buys stability. A GBDT challenger is deferred to a later stage.
+regularisation buys stability.
 
 The model is trained per corridor with walk-forward (expanding window): fit on
 all data available up to ``T``, predict at ``T``. Features come from
@@ -177,9 +177,6 @@ def walk_forward_predict(
     min_train: int = 500,
     h: int = DEFAULT_H,
     alpha: float = 1.0,
-    model: str = "ridge",
-    catboost_iters: int = 300,
-    catboost_depth: int = 3,
 ) -> pd.DataFrame:
     """Expanding-window walk-forward prediction of advantage for one corridor.
 
@@ -187,85 +184,14 @@ def walk_forward_predict(
     data *before* ``T`` (target uses future up to ``T-1``'s horizon, which is in
     the past relative to ``T``) and predict the advantage at ``T``.
 
-    ``model`` selects the estimator: ``"ridge"`` (default) or ``"catboost"``.
-    CatBoost is the GBDT challenger with strict complexity limits (shallow depth,
-    capped iterations) per implementation_plan.md Stage 5.
-
     Returns a frame with ``quote_date, iso, rub_per_unit, advantage (actual),
     pred_advantage`` — the raw model output. Thresholding into signals happens
     in the backtester / policy, not here.
     """
     df = build_dataset(panel, iso, h=h, include_unlabelled=True)
 
-    if model == "ridge":
-        def fit_fn(X_tr: np.ndarray, y_tr: np.ndarray):
-            m = RidgeModel(alpha=alpha).fit(X_tr, y_tr)
-            return m.predict
+    def fit_fn(X_tr, y_tr):
+        m = RidgeModel(alpha=alpha).fit(X_tr, y_tr)
+        return m.predict
 
-        return _walk_forward(df, iso, min_train, fit_fn)
-
-    if model == "catboost":
-        from catboost import CatBoostRegressor
-
-        def fit_fn(X_tr: np.ndarray, y_tr: np.ndarray):
-            m = CatBoostRegressor(
-                iterations=catboost_iters,
-                depth=catboost_depth,
-                learning_rate=0.05,
-                l2_leaf_reg=3.0,
-                random_seed=0,
-                verbose=False,
-                allow_writing_files=False,
-            )
-            m.fit(X_tr, y_tr)
-            return m.predict
-
-        return _walk_forward(df, iso, min_train, fit_fn)
-
-    raise ValueError(f"Unknown model {model!r}; expected 'ridge' or 'catboost'")
-
-
-def predict_asof(
-    panel: pd.DataFrame,
-    iso: str,
-    as_of: date | pd.Timestamp,
-    *,
-    min_train: int = 500,
-    h: int = DEFAULT_H,
-    alpha: float = 1.0,
-) -> ModelPrediction:
-    """Fit the Ridge value head on matured targets and predict the latest quote."""
-    decision_time = pd.Timestamp(as_of)
-    availability_column = "available_on" if "available_on" in panel.columns else "quote_date"
-    available_panel = panel.loc[panel[availability_column] <= decision_time].copy()
-    dataset = build_dataset(available_panel, iso, h=h, include_unlabelled=True)
-    if dataset.empty:
-        raise ValueError(
-            f"No feature-complete {iso} observations are available by {decision_time.date()}"
-        )
-
-    current = dataset.iloc[-1]
-    train = dataset.loc[
-        dataset["advantage"].notna()
-        & dataset["target_available_on"].notna()
-        & (dataset["target_available_on"] <= decision_time)
-        & (dataset["quote_date"] < current["quote_date"])
-    ]
-    if len(train) < min_train:
-        raise ValueError(
-            f"{iso} has only {len(train)} matured training observations; {min_train} are required"
-        )
-
-    model = RidgeModel(alpha=alpha).fit(
-        train[list(FEATURE_COLUMNS)].to_numpy(dtype=float),
-        train["advantage"].to_numpy(dtype=float),
-    )
-    score = float(model.predict(current[list(FEATURE_COLUMNS)].to_numpy(dtype=float)[None, :])[0])
-    return ModelPrediction(
-        currency=iso,
-        quote_date=current["quote_date"].date(),
-        available_on=current["available_on"].date(),
-        predicted_advantage_bps=score,
-        training_observations=len(train),
-        model="ridge",
-    )
+    return _walk_forward(X, y, dates, iso, rates, min_train, fit_fn)
