@@ -52,6 +52,8 @@ from dataclasses import dataclass
 import pandas as pd
 
 from ..adaptive import (
+    PERCENTILE_WINDOWS,
+    ZSCORE_SPANS,
     TuningConfig,
     percentile_candidates,
     walk_forward_tuned,
@@ -63,13 +65,6 @@ from ..utility_risk import UtilityRiskConfig, rescore, walk_forward_scores
 from .spec import BenchmarkSpec
 
 SCORE_SCHEMA: tuple[str, ...] = ("quote_date", "available_on", "iso", "rub_per_unit", "score")
-
-# Candidate windows offered to the walk-forward calibration. The grid reaches
-# well below the 60-day span baked into `features.py` because the calibration
-# kept pinning its lower edge, and an optimum at a grid boundary is not an
-# optimum.
-ZSCORE_SPANS: tuple[int, ...] = (5, 10, 20, 40, 60, 120, 250)
-PERCENTILE_WINDOWS: tuple[int, ...] = (20, 30, 60, 90, 180, 250)
 
 _BLOCKED = _BLOCKED_SENTINEL
 
@@ -119,6 +114,11 @@ STRATEGIES: tuple[Strategy, ...] = (
         "reversal", "rule", "window_closing",
         "Курс был у 90-дневного минимума и пошёл вверх",
         minimum_score=-1e5,
+    ),
+    Strategy(
+        "zscore_truthful", "live", "favourable_now",
+        "Калиброванный z-score, который молчит, когда сказать нечего правдивого",
+        minimum_score=-5e5,
     ),
     Strategy(
         "zscore_tuned", "tuned", "favourable_now",
@@ -255,6 +255,21 @@ def build_scores(
         ].copy()
         rows["score"] = rows["currency_gain_bps"]
         return rows.dropna(subset=["score"])[list(SCORE_SCHEMA)].reset_index(drop=True)
+
+    if strategy.kind == "live":
+        from ..signals import SignalLayerConfig
+        from ..signals import score as live_score
+
+        live = SignalLayerConfig(
+            tuning=TuningConfig(
+                horizon=spec.horizon, execution_offset=spec.execution_offset
+            )
+        )
+        parts = [live_score(panel, iso, live) for iso in spec.corridors]
+        parts = [part for part in parts if len(part)]
+        if not parts:
+            return pd.DataFrame(columns=list(SCORE_SCHEMA))
+        return pd.concat(parts, ignore_index=True)[list(SCORE_SCHEMA)]
 
     if strategy.kind == "tuned":
         tuning = TuningConfig(

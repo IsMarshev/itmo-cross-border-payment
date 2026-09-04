@@ -27,6 +27,40 @@ def build_baseline_scores(panel: pd.DataFrame) -> pd.DataFrame:
     ].dropna(subset=["score"])
 
 
+def build_live_scores(
+    panel: pd.DataFrame,
+    corridors: list[str] | tuple[str, ...],
+) -> pd.DataFrame:
+    """The score that actually ships: the calibrated, truth-gated z-score.
+
+    Delegates to :mod:`signal_layer.signals` rather than re-deriving anything,
+    so this backtest and the serving path cannot drift apart.
+    """
+    from signal_layer.signals import SignalLayerConfig, score
+
+    config = SignalLayerConfig()
+    parts: list[pd.DataFrame] = []
+    for corridor in corridors:
+        scored = score(panel, corridor, config)
+        if len(scored):
+            scored = scored.assign(score_source="live")
+            parts.append(
+                scored[
+                    [
+                        "quote_date",
+                        "available_on",
+                        "iso",
+                        "rub_per_unit",
+                        "score",
+                        "score_source",
+                    ]
+                ]
+            )
+    if not parts:
+        return pd.DataFrame()
+    return pd.concat(parts, ignore_index=True).sort_values(["iso", "quote_date"])
+
+
 def build_model_scores(
     panel: pd.DataFrame,
     corridors: list[str] | tuple[str, ...],

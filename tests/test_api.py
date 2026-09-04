@@ -69,7 +69,8 @@ def test_latest_rate_uses_only_quote_available_as_of_requested_date(tmp_path: Pa
     }
 
 
-def test_signal_evaluation_returns_only_a_factual_candidate(tmp_path: Path) -> None:
+def test_signal_evaluation_holds_when_the_layer_has_no_case(tmp_path: Path) -> None:
+    """Short history cannot calibrate a window, so the layer must hold, not guess."""
     app = _app_with_history(tmp_path)
 
     response = _get(app, "/v1/signals/USD/evaluate", params={"as_of": "2026-03-03"})
@@ -79,40 +80,45 @@ def test_signal_evaluation_returns_only_a_factual_candidate(tmp_path: Path) -> N
     assert payload["currency"] == "USD"
     assert payload["as_of"] == date(2026, 3, 3).isoformat()
     assert payload["quote"]["quote_date"] == "2026-03-02"
-    assert payload["reference_observations"] == 60
-    assert payload["favourable_percentile"] == 100.0
-    assert payload["strategy"] == "baseline"
-    assert payload["predicted_advantage_bps"] is None
-    assert payload["decision"] == "candidate"
-    assert payload["message"] == (
-        "Курс USD сейчас ниже, чем в 100% из последних 60 доступных наблюдений."
-    )
+    assert payload["indicator"] == "zscore_tuned"
+    assert payload["decision"] == "hold"
+    assert payload["message"] is None
 
 
-def test_signal_evaluation_requires_history_instead_of_guessing(tmp_path: Path) -> None:
-    app = _app_with_history(tmp_path, observations=10)
+def test_signal_evaluation_carries_the_briefs_signal_table_fields(tmp_path: Path) -> None:
+    """When the layer does fire, the response is the brief's signal row."""
+    app = _app_with_history(tmp_path, observations=900)
+    as_of = (pd.Timestamp("2026-01-01") + pd.offsets.Day(899)).date().isoformat()
 
-    response = _get(app, "/v1/signals/USD/evaluate", params={"as_of": "2026-01-11"})
-
-    assert response.status_code == 422
-    assert "60 are required" in response.json()["detail"]
-
-
-def test_signal_evaluation_can_use_the_ridge_model(tmp_path: Path) -> None:
-    app = _app_with_history(tmp_path, observations=620)
-    as_of = (pd.Timestamp("2026-01-01") + pd.offsets.Day(620)).date().isoformat()
-
-    response = _get(
-        app,
-        "/v1/signals/USD/evaluate",
-        params={"as_of": as_of, "strategy": "ridge"},
-    )
+    response = _get(app, "/v1/signals/USD/evaluate", params={"as_of": as_of})
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["strategy"] == "ridge"
-    assert payload["training_observations"] >= 500
-    assert isinstance(payload["predicted_advantage_bps"], float)
+    assert payload["indicator"] == "zscore_tuned"
+    assert payload["decision"] in {"candidate", "hold"}
+    if payload["decision"] == "candidate":
+        assert payload["direction"] in {"down", "up"}
+        assert payload["speed"] in {"fast", "medium", "slow"}
+        assert payload["scenario"] == "favourable_now"
+        assert payload["window"].startswith("span=")
+        assert 0.0 <= payload["strength_pct"] <= 1.0
+        # A push may only claim a fact that holds, so a fired signal always
+        # sits below the trend its own window measured.
+        assert payload["deviation_pct"] < 0
+        assert payload["message"]
+
+
+def test_signal_evaluation_never_offers_a_strategy_switch(tmp_path: Path) -> None:
+    """The benchmark picks what ships; the endpoint must not reopen that."""
+    app = _app_with_history(tmp_path)
+
+    response = _get(
+        app, "/v1/signals/USD/evaluate", params={"as_of": "2026-03-03", "strategy": "ridge"}
+    )
+
+    # An unknown query parameter is ignored rather than selecting anything.
+    assert response.status_code == 200
+    assert "strategy" not in response.json()
 
 
 def test_backtest_endpoint_returns_stage_four_summary(tmp_path: Path) -> None:

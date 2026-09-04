@@ -30,6 +30,12 @@ from .labels import build_labels
 from .rules import RULE_NAMES, rule_score
 from .utility_risk import _training_prefix_lengths
 
+# Candidate windows offered to the calibration. The grid reaches well below the
+# 60-day span baked into `features.py` because the selection kept pinning its
+# lower edge, and an optimum at a grid boundary is not an optimum.
+ZSCORE_SPANS: tuple[int, ...] = (5, 10, 20, 40, 60, 120, 250)
+PERCENTILE_WINDOWS: tuple[int, ...] = (20, 30, 60, 90, 180, 250)
+
 SCORE_SCHEMA: tuple[str, ...] = (
     "quote_date",
     "available_on",

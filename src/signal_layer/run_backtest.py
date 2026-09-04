@@ -7,7 +7,6 @@ from datetime import date
 from pathlib import Path
 
 from signal_layer.config import Settings
-from signal_layer.dashboard import generate_dashboard
 from signal_layer.services import BacktestService, RateService
 
 DEFAULT_CORRIDORS = ("TJS", "UZS", "KGS", "AMD", "KZT")
@@ -73,13 +72,11 @@ def main(argv: list[str] | None = None) -> None:
         orient="records",
         indent=2,
     )
-    dashboard_path = None
-    if not args.skip_dashboard:
-        dashboard_path = generate_dashboard(args.out)
     print(result.report.round(3).to_string(index=False))
     print(f"\nArtifacts written to {args.out}")
-    if dashboard_path is not None:
-        print(f"Dashboard written to {dashboard_path}")
+    # The dashboard for this CLI was lost in the m0->backend merge and is not
+    # rebuilt here: CBSB-1 supersedes it and renders a richer page from its own
+    # artifacts. See `python -m signal_layer.run_benchmark`.
 
 
 if __name__ == "__main__":

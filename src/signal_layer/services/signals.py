@@ -1,4 +1,16 @@
-"""A deterministic, explainable baseline for signal evaluation."""
+"""Serving the signal layer: what would we send for this corridor, on this date.
+
+Thin by design. Every decision — which indicator, which window, whether the day
+is worth a slot, what the message may claim — lives in
+:mod:`signal_layer.signals`, which is what CBSB-1 selected. This module only
+resolves a corridor and a date to that layer's answer and shapes it for HTTP.
+
+There is no strategy parameter. The benchmark picked the calibrated z-score with
+a send-time truth gate: 81.7 bps of client money per transfer against 23.4 for
+the same rule with a fixed window and 14.0 for the learned model, significant on
+all five corridors. Offering alternatives here would let something the benchmark
+never blessed reach a client.
+"""
 
 from __future__ import annotations
 
@@ -8,120 +20,103 @@ from typing import Literal
 
 import pandas as pd
 
-from signal_layer.models import predict_asof
 from signal_layer.services.rates import RateQuote, RateService
-
-SignalStrategy = Literal["baseline", "ridge"]
+from signal_layer.signals import INDICATOR, SignalLayerConfig, latest_signal
 
 
 class InsufficientHistoryError(ValueError):
-    """There are not enough available observations for a stable comparison."""
+    """There is not enough history for the layer to calibrate and decide."""
 
 
 @dataclass(frozen=True, slots=True)
 class SignalEvaluation:
-    """A non-stateful signal candidate; it is not a delivered notification."""
+    """A signal candidate. Not a delivered notification: the layer proposes."""
 
     currency: str
     as_of: date
     quote: RateQuote
-    strategy: SignalStrategy
-    reference_observations: int
-    favourable_percentile: float
-    predicted_advantage_bps: float | None
-    training_observations: int | None
+    indicator: str
     decision: Literal["candidate", "hold"]
     reason: str
     message: str | None
+    direction: str | None = None
+    speed: str | None = None
+    scenario: str | None = None
+    window: str | None = None
+    strength: float | None = None
+    strength_pct: float | None = None
+    deviation_pct: float | None = None
+    level_percentile: float | None = None
 
 
 class SignalService:
-    """Evaluate an as-of factual baseline without a forecasting claim."""
+    """Resolve one corridor and date through the live signal layer."""
 
     def __init__(
         self,
         rate_service: RateService,
         *,
-        lookback_observations: int = 60,
-        candidate_percentile: float = 85.0,
+        config: SignalLayerConfig | None = None,
+        context_currency: str = "USD",
     ) -> None:
-        if lookback_observations <= 0:
-            raise ValueError("lookback_observations must be positive")
-        if not 0 < candidate_percentile <= 100:
-            raise ValueError("candidate_percentile must be in (0, 100]")
         self._rate_service = rate_service
-        self._lookback_observations = lookback_observations
-        self._candidate_percentile = candidate_percentile
+        self._config = config or SignalLayerConfig()
+        self._context_currency = context_currency
 
-    def evaluate(
-        self,
-        currency: str,
-        as_of: date,
-        *,
-        strategy: SignalStrategy = "baseline",
-    ) -> SignalEvaluation:
-        """Compare the latest available quote against prior available quotes.
+    def evaluate(self, currency: str, as_of: date) -> SignalEvaluation:
+        """The layer's answer for ``currency`` on ``as_of``.
 
-        The comparison set ends strictly before the current quote. Thus neither
-        future rates nor a duplicate use of today's observation enter the fact
-        shown to a client.
+        A ``hold`` is a real answer, not a failure: most days are not worth a
+        scarce push, and a day whose message would not be true is refused
+        outright.
         """
         quote = self._rate_service.latest_quote(currency, as_of)
-        history = self._rate_service.currency_history(quote.currency)
-        available_history = history.loc[history["available_on"] <= pd.Timestamp(as_of)]
-        reference = available_history.loc[
-            available_history["quote_date"] < pd.Timestamp(quote.quote_date)
-        ].tail(self._lookback_observations)
-        if len(reference) < self._lookback_observations:
-            raise InsufficientHistoryError(
-                f"{quote.currency} has only {len(reference)} prior observations; "
-                f"{self._lookback_observations} are required"
-            )
+        currencies = [quote.currency]
+        if quote.currency != self._context_currency:
+            currencies.append(self._context_currency)
+        panel = self._rate_service.panel_asof(currencies, as_of)
 
-        favourable_percentile = float((reference["rub_per_unit"] > quote.rub_per_unit).mean() * 100)
-        predicted_advantage_bps = None
-        training_observations = None
-        if strategy == "ridge":
-            context_currencies = [quote.currency]
-            if quote.currency != "USD":
-                context_currencies.append("USD")
-            panel = self._rate_service.panel_asof(context_currencies, as_of)
-            try:
-                prediction = predict_asof(panel, quote.currency, as_of)
-            except ValueError as error:
-                raise InsufficientHistoryError(str(error)) from error
-            predicted_advantage_bps = prediction.predicted_advantage_bps
-            training_observations = prediction.training_observations
-            is_candidate = (
-                predicted_advantage_bps > 0
-                and favourable_percentile >= self._candidate_percentile
+        try:
+            signal = latest_signal(
+                panel, quote.currency, pd.Timestamp(as_of), self._config
             )
-        else:
-            is_candidate = favourable_percentile >= self._candidate_percentile
-        rounded_percentile = round(favourable_percentile)
-        reason = (
-            f"Current rate is lower than {rounded_percentile}% of the preceding "
-            f"{self._lookback_observations} available quotes"
-        )
-        if predicted_advantage_bps is not None:
-            reason = f"Ridge score is {predicted_advantage_bps:.1f} bps; {reason.lower()}"
-        message = None
-        if is_candidate:
-            message = (
-                f"Курс {quote.currency} сейчас ниже, чем в {rounded_percentile}% "
-                f"из последних {self._lookback_observations} доступных наблюдений."
+        except ValueError as error:
+            raise InsufficientHistoryError(str(error)) from error
+
+        if signal is None:
+            return SignalEvaluation(
+                currency=quote.currency,
+                as_of=as_of,
+                quote=quote,
+                indicator=INDICATOR,
+                decision="hold",
+                reason=(
+                    "Day not selected: either the rate is not below the trend the "
+                    "indicator measured, or the communication budget is better spent "
+                    "elsewhere this week"
+                ),
+                message=None,
             )
 
         return SignalEvaluation(
             currency=quote.currency,
             as_of=as_of,
             quote=quote,
-            strategy=strategy,
-            reference_observations=len(reference),
-            favourable_percentile=favourable_percentile,
-            predicted_advantage_bps=predicted_advantage_bps,
-            training_observations=training_observations,
-            decision="candidate" if is_candidate else "hold",
-            reason=reason,
-            message=message,
+            indicator=str(signal["indicator"]),
+            decision="candidate",
+            reason=(
+                f"Rate sits {abs(float(signal['deviation_pct'])):.1f}% below its "
+                f"{signal['window']} trend; signal strength is in the "
+                f"{float(signal['strength_pct']) * 100:.0f}th percentile of this "
+                f"corridor's own history"
+            ),
+            message=str(signal["message"]) or None,
+            direction=str(signal["direction"]),
+            speed=str(signal["speed"]),
+            scenario=str(signal["scenario"]),
+            window=str(signal["window"]),
+            strength=float(signal["strength"]),
+            strength_pct=float(signal["strength_pct"]),
+            deviation_pct=float(signal["deviation_pct"]),
+            level_percentile=float(signal["level_percentile"]),
         )

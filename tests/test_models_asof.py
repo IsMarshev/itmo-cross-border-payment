@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
-from signal_layer.models import build_dataset, predict_asof, walk_forward_predict
+from signal_layer.models import build_dataset, walk_forward_predict
 
 
 def _model_panel(n: int = 420) -> pd.DataFrame:
@@ -44,22 +43,6 @@ def test_walk_forward_uses_only_targets_matured_by_decision_time() -> None:
     assert first["training_observations"] >= 50
     assert eligible["target_available_on"].max() <= first["available_on"]
 
-
-def test_predict_asof_is_unchanged_by_unavailable_future_rows() -> None:
-    panel = _model_panel()
-    as_of = panel.loc[panel["iso"].eq("TJS"), "available_on"].iloc[350]
-
-    snapshot_prediction = predict_asof(
-        panel.loc[panel["available_on"] <= as_of],
-        "TJS",
-        as_of,
-        h=20,
-        min_train=50,
-    )
-    full_prediction = predict_asof(panel, "TJS", as_of, h=20, min_train=50)
-
-    assert full_prediction.quote_date == snapshot_prediction.quote_date
-    assert full_prediction.training_observations == snapshot_prediction.training_observations
-    assert full_prediction.predicted_advantage_bps == pytest.approx(
-        snapshot_prediction.predicted_advantage_bps
-    )
+# The as-of guarantee this module used to check for `models.predict_asof` now
+# lives in tests/test_signals.py, against the layer that actually ships. The
+# Ridge serving path was removed with the model's negative result.

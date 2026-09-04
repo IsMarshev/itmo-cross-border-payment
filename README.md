@@ -45,10 +45,17 @@ A run writes `reports/benchmark/dashboard.html` — a standalone page (inline SV
 no external dependencies, light and dark) that leads with the run's conclusions
 — alongside `scorecard.md` and the raw CSVs.
 
-`signal_layer.adaptive` holds the run's best live strategy: a z-score whose
-window is chosen walk-forward per corridor from the trailing rank correlation
-between score and realised client money. It scores 30.5bp against 23.4 for the
-same rule with a fixed window, and beats the learned model twice over.
+`signal_layer.signals` is what ships, and the only entry point that serves: a
+z-score whose window is chosen walk-forward, which refuses any day whose push
+would have no true favourable fact to state. 81.7bp of client money per transfer
+against 23.4 for the same rule with a fixed window, significant on all five
+corridors. It takes no strategy parameter — the benchmark makes that choice.
+
+```python
+from signal_layer.signals import signal_table, signals_asof
+signal_table(panel, ["TJS", "UZS"])       # the brief's signal table
+signals_asof(panel, ["TJS"], "2026-06-15")  # what we would have sent on that date
+```
 
 `signal_layer.utility_risk` is the MVP scored by it: three walk-forward heads
 (P(local minimum), expected advantage, P(bad push)) combined into a mean-risk

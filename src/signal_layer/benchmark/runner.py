@@ -52,6 +52,7 @@ _NULL_METRICS = (
     "bad_push_rate",
 )
 _WEIGHTED_METRICS = (
+    "ceiling_bps",
     "hit_rate",
     "hit_favourable",
     "hit_closing",
@@ -180,8 +181,15 @@ def _fold_statistics(
     """Metrics for one (strategy, corridor, fold) cell."""
     if signal_labels.empty or universe.empty:
         return {"n_signals": 0, **{key: float("nan") for key in _WEIGHTED_METRICS}}
+    # The ceiling is matched to this cell's own budget, the same way the random
+    # null is. Value per push rises steeply as pushes get rarer, so a ceiling
+    # fixed at some other frequency would flatter a selective strategy and
+    # penalise a talkative one for a difference that is purely cadence.
+    best = np.sort(universe["currency_gain_bps"].to_numpy(dtype=float))[::-1]
+    best = best[np.isfinite(best)][: len(signal_labels)]
     return {
         "n_signals": len(signal_labels),
+        "ceiling_bps": float(best.mean()) if len(best) else float("nan"),
         "hit_rate": float(signal_labels[hit_col].mean()),
         "hit_favourable": float(signal_labels["held_favourable"].mean()),
         "hit_closing": float(signal_labels["held_window_closing"].mean()),
@@ -594,19 +602,17 @@ def _build_leaderboard(
         rows.append(row)
 
     leaderboard = pd.DataFrame(rows)
-    # 0 = a matched random schedule (zero expected uplift by construction),
-    # 100 = perfect foresight choosing freely within the same weekly budget.
-    ceiling = leaderboard.loc[leaderboard["strategy"].eq("oracle_topk"), "currency_uplift_bps"]
-    if not len(ceiling):
-        ceiling = leaderboard.loc[leaderboard["strategy"].eq("oracle"), "currency_uplift_bps"]
     leaderboard["selection"] = leaderboard["strategy"].map(
         lambda name: get_strategy(name).selection
     )
-    span = float(ceiling.iloc[0]) if len(ceiling) else float("nan")
-    leaderboard["cbsb_score"] = (
-        leaderboard["currency_uplift_bps"] / span * 100.0
-        if np.isfinite(span) and span > 0
-        else np.nan
+    # 0 = a matched random schedule (zero expected uplift by construction),
+    # 100 = perfect foresight spending *this strategy's own* budget. Both ends
+    # of the scale are therefore frequency-matched, so a strategy that stays
+    # quiet is not credited for the cadence effect alone.
+    ceiling = leaderboard["ceiling_bps"].to_numpy(dtype=float)
+    value = leaderboard["currency_uplift_bps"].to_numpy(dtype=float)
+    leaderboard["cbsb_score"] = np.where(
+        np.isfinite(ceiling) & (ceiling > 0), value / ceiling * 100.0, np.nan
     )
     nulls = pd.concat(null_rows, ignore_index=True) if null_rows else pd.DataFrame()
     return (

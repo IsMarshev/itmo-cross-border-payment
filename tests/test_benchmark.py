@@ -155,10 +155,19 @@ def test_the_oracle_beats_every_real_strategy(small_run):
     board = small_run.leaderboard.set_index("strategy")["currency_uplift_bps"]
     assert board["oracle_topk"] > board["percentile"]
     assert board["oracle_topk"] > board["utility_risk"]
-    # The ceiling defines the scale, so it scores exactly 100.
-    assert small_run.leaderboard.set_index("strategy").loc["oracle_topk", "cbsb_score"] == (
-        pytest.approx(100.0)
-    )
+
+
+def test_the_ceiling_is_matched_to_each_strategys_own_budget(small_run):
+    """Value per push climbs steeply as pushes get rarer, so a ceiling fixed at
+    one cadence would flatter a selective strategy for cadence alone."""
+    board = small_run.leaderboard.set_index("strategy")
+    assert (board["ceiling_bps"] > 0).all()
+    # Even perfect foresight under a weekly cap falls short of the unconstrained
+    # best days of the fold, which is the scale's 100.
+    assert 0 < board.loc["oracle_topk", "cbsb_score"] < 100
+    for name in ("percentile", "utility_risk"):
+        assert board.loc[name, "cbsb_score"] < board.loc["oracle_topk", "cbsb_score"]
+        assert board.loc[name, "currency_uplift_bps"] < board.loc[name, "ceiling_bps"]
 
 
 def test_every_contender_respects_the_shared_push_budget(small_run):

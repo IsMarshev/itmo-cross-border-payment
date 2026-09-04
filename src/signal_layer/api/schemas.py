@@ -23,17 +23,28 @@ class RateQuoteResponse(BaseModel):
 
 
 class SignalEvaluationResponse(BaseModel):
+    """One corridor's answer for one date, as the live layer produced it.
+
+    The fields after ``decision`` carry the brief's signal-table contract:
+    indicator, direction, strength, indicator speed and recommended scenario.
+    They are absent on a hold, where there is nothing to describe.
+    """
+
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     as_of: date
     quote: RateQuoteResponse
-    strategy: Literal["baseline", "ridge"]
-    reference_observations: int = Field(gt=0)
-    favourable_percentile: float = Field(ge=0, le=100)
-    predicted_advantage_bps: float | None = None
-    training_observations: int | None = Field(default=None, ge=1)
+    indicator: str
     decision: Literal["candidate", "hold"]
     reason: str
     message: str | None = None
+    direction: Literal["down", "up"] | None = None
+    speed: Literal["fast", "medium", "slow", "unknown"] | None = None
+    scenario: Literal["favourable_now", "window_closing"] | None = None
+    window: str | None = None
+    strength: float | None = None
+    strength_pct: float | None = Field(default=None, ge=0, le=1)
+    deviation_pct: float | None = None
+    level_percentile: float | None = Field(default=None, ge=0, le=100)
 
 
 class BacktestRequest(BaseModel):

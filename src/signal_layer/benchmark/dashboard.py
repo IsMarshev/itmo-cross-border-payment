@@ -30,11 +30,11 @@ from .spec import BenchmarkSpec
 
 # Strategies whose signals are drawn on the rate chart. More than a couple of
 # series and the markers stop being readable.
-CHART_STRATEGIES: tuple[str, ...] = ("utility_risk", "percentile")
+CHART_STRATEGIES: tuple[str, ...] = ("zscore_truthful", "utility_risk")
 
 # The "ordinary statistics" the MVP is measured against in question 2.
 RULE_STRATEGIES: tuple[str, ...] = (
-    "zscore_tuned", "percentile_tuned", "rank_blend", "consensus",
+    "zscore_truthful", "zscore_tuned", "percentile_tuned", "rank_blend", "consensus",
     "zscore", "seasonal", "percentile", "momentum", "drawdown",
 )
 
@@ -981,13 +981,15 @@ def _answers_section(
     <h3>Что тогда работает?</h3>
     <p class="verdict">{verdict3}</p>
     <p class="answer-body">{body3}</p>
-    <p class="answer-caveat">Честная оговорка о том, чего здесь <b>нет</b>.
-      Калибровка задумывалась как подстройка под коридор — ТЗ просит её именно
-      так, «поскольку волатильность различается». На деле все пять коридоров
-      выбирают одно и то же окно и никогда не переключаются. Выигрыш идёт не от
-      различия коридоров, а от того, что горизонт сигнала должен совпадать с
-      горизонтом, на котором его проверяют. Это согласуется с тем, что коридоры
-      здесь — почти один ряд: движется рубль, а не валюта получателя.</p>
+    <p class="answer-caveat">Две честные оговорки. <b>Подстройки под коридор не
+      происходит</b>: ТЗ просит калибровать окна, «поскольку волатильность
+      различается», но все пять коридоров выбирают одно и то же окно и никогда
+      не переключаются — выигрыш идёт от совпадения горизонта сигнала с
+      горизонтом проверки, а не от различий между коридорами. И <b>три гейта из
+      семи не пройдены</b>: lift 0.98, ровность 1.36, максимальная пауза 90
+      дней. Требование правдивости заставляет молчать в растущем рынке, и это
+      его реальная цена. Закрывается вторым типом сообщения на такие периоды —
+      это следующий шаг, а не сделанный.</p>
   </article>
 </section>"""
 
@@ -1081,12 +1083,14 @@ def render_dashboard(
         q3_body = (
             f"Лучший результат прогона среди всего, что можно отправить вживую, "
             f"даёт <b>{_esc(champion)}</b> — {_num(champion_value)} б.п. "
-            f"Это тот же z-score, но окно ему не зашито, а выбирается "
-            f"walk-forward из сетки по прошлой связи счёта с деньгами клиента. "
+            f"Это z-score, у которого окно не зашито, а выбирается walk-forward, "
+            f"и который <b>молчит в день, о котором нечего сказать правдиво</b>. "
             f"Против фиксированного окна это <b>+{_num(gain)} б.п.</b> "
-            f"(+{_num(gain / baseline_value * 100, 0)}%), причём лучше "
-            f"на всех пяти коридорах и в 8 окнах из 10. Против MVP — "
-            f"более чем вдвое."
+            f"(+{_num(gain / baseline_value * 100, 0)}%). Второе условие оказалось "
+            f"важнее первого: требование «не отправлять пуш, факт которого не "
+            f"выполняется» — это комплаенс, но именно оно даёт основной прирост. "
+            f"Дни, которые оно отсекает, не просто немые: они теряют клиенту "
+            f"65 б.п. и отрицательны на всех пяти коридорах."
         )
     else:
         q3_body = "Нет данных для сравнения."
@@ -1306,8 +1310,8 @@ def render_dashboard(
     <div class="tabs" role="tablist">{tabs}</div>
     {panels}
     <div class="key">
-      <span><i class="key-hollow"></i>MVP полезность/риск</span>
-      <span><i style="background:var(--ceiling)"></i>правило процентиля</span>
+      <span><i class="key-hollow"></i>рабочий сигнал (z-score с проверкой факта)</span>
+      <span><i style="background:var(--ceiling)"></i>MVP полезность/риск</span>
     </div>
   </div>
 </section>
