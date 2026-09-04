@@ -133,6 +133,29 @@ def _speed_of(window_label: str) -> str:
     return "slow"
 
 
+def truth_mask(
+    panel: pd.DataFrame,
+    iso: str,
+    scored: pd.DataFrame,
+    config: SignalLayerConfig | None = None,
+) -> np.ndarray:
+    """Which scored days have a true favourable fact to state.
+
+    Public so the benchmark can score the *complement* as a diagnostic: the
+    days the gate rejects are not merely mute, and it is worth being able to
+    re-run that claim rather than quote it.
+    """
+    resolved = config or SignalLayerConfig()
+    deviations = _deviation_from_trend(panel, iso, resolved.spans)
+    deviation = np.array(
+        [
+            _lookup_deviation(deviations, label, date)
+            for label, date in zip(scored["chosen"], scored["quote_date"], strict=True)
+        ]
+    )
+    return np.isfinite(deviation) & (deviation < 0)
+
+
 def score(
     panel: pd.DataFrame, iso: str, config: SignalLayerConfig | None = None
 ) -> pd.DataFrame:
@@ -149,16 +172,7 @@ def score(
     )
     if scored.empty or not resolved.require_true_fact:
         return scored
-    deviations = _deviation_from_trend(panel, iso, resolved.spans)
-    deviation = np.array(
-        [
-            _lookup_deviation(deviations, label, date)
-            for label, date in zip(
-                scored["chosen"], scored["quote_date"], strict=True
-            )
-        ]
-    )
-    truthful = np.isfinite(deviation) & (deviation < 0)
+    truthful = truth_mask(panel, iso, scored, resolved)
     return scored.assign(score=np.where(truthful, scored["score"], BLOCKED))
 
 

@@ -49,6 +49,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from ..adaptive import (
@@ -121,6 +122,11 @@ STRATEGIES: tuple[Strategy, ...] = (
         minimum_score=-5e5,
     ),
     Strategy(
+        "zscore_vetoed", "live_vetoed", "favourable_now",
+        "Диагностика: только дни, которые проверка факта отвергает",
+        minimum_score=-5e5,
+    ),
+    Strategy(
         "zscore_tuned", "tuned", "favourable_now",
         "z-score, окно которого коридор выбирает сам walk-forward",
         rule="zscore",
@@ -182,7 +188,30 @@ STRATEGIES: tuple[Strategy, ...] = (
     ),
 )
 
-DEFAULT_STRATEGY_NAMES: tuple[str, ...] = tuple(s.name for s in STRATEGIES)
+ALL_STRATEGY_NAMES: tuple[str, ...] = tuple(s.name for s in STRATEGIES)
+
+# What a default run scores. Enough to tell the story and no more: what ships,
+# the days it refuses, the two steps that got it there, the statistical field it
+# had to beat, the learned model it replaced, and the ceiling.
+#
+# Everything else stays registered and reachable through `--strategies`, because
+# a negative result nobody can re-run is not a result. The omitted rows are the
+# hindsight twins (`*_weekly`), the model ablations (`utility_only`,
+# `utility_risk_paced`), `consensus` (tracks `rank_blend` within noise),
+# `rule_select` (choosing the indicator per corridor loses to always taking the
+# z-score) and `reversal` (-31 bps: buying the bounce costs the client money).
+DEFAULT_STRATEGY_NAMES: tuple[str, ...] = (
+    "zscore_truthful",
+    "zscore_vetoed",
+    "zscore_tuned",
+    "zscore",
+    "percentile",
+    "seasonal",
+    "rank_blend",
+    "utility_risk",
+    "oracle",
+    "oracle_topk",
+)
 
 _BY_NAME = {s.name: s for s in STRATEGIES}
 
@@ -256,17 +285,29 @@ def build_scores(
         rows["score"] = rows["currency_gain_bps"]
         return rows.dropna(subset=["score"])[list(SCORE_SCHEMA)].reset_index(drop=True)
 
-    if strategy.kind == "live":
-        from ..signals import SignalLayerConfig
+    if strategy.kind in ("live", "live_vetoed"):
+        from ..rules import BLOCKED
+        from ..signals import SignalLayerConfig, truth_mask
         from ..signals import score as live_score
 
         live = SignalLayerConfig(
             tuning=TuningConfig(
                 horizon=spec.horizon, execution_offset=spec.execution_offset
-            )
+            ),
+            # The diagnostic needs the ungated scores so it can invert the gate.
+            require_true_fact=strategy.kind == "live",
         )
-        parts = [live_score(panel, iso, live) for iso in spec.corridors]
-        parts = [part for part in parts if len(part)]
+        parts = []
+        for iso in spec.corridors:
+            scored = live_score(panel, iso, live)
+            if not len(scored):
+                continue
+            if strategy.kind == "live_vetoed":
+                truthful = truth_mask(panel, iso, scored, live)
+                scored = scored.assign(
+                    score=np.where(truthful, BLOCKED, scored["score"])
+                )
+            parts.append(scored)
         if not parts:
             return pd.DataFrame(columns=list(SCORE_SCHEMA))
         return pd.concat(parts, ignore_index=True)[list(SCORE_SCHEMA)]

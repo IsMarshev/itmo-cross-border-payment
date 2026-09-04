@@ -1,52 +1,36 @@
-"""MVP utility-and-risk model for the signal layer.
+"""The learned utility/risk model — kept as evidence, not as a live path.
 
-The brief asks two things that the earlier Ridge value-head does not answer.
-First, a classifier for "did this day turn out to be a local minimum of the +-h
-window". Second, a threshold that respects an *asymmetric* price of error:
-telling a client to transfer and then watching the rate fall further is more
-expensive than staying quiet through a good day, because it costs the client
-money **and** burns a scarce push slot.
+CBSB-1 rejected this. It scores 14.0 bps of client money per transfer against
+81.7 for the calibrated z-score in :mod:`signal_layer.signals`, is positive on
+two corridors out of five where the statistics are positive on all five, and is
+beaten by every statistical rule in the run. Nothing serves from here; the
+module exists so the negative result stays re-runnable
+(``--strategies utility_risk``), which the brief asks for explicitly.
 
-This module answers both with three small, inspectable heads fitted
-walk-forward per corridor:
+What it does, and why each part failed to earn its place:
 
-``p_min``   logistic — P(today is a local minimum of the +-h window)
-            The brief's classification target. Reported as the confidence a
-            push can carry, never as the decision itself.
-``u_bps``   ridge — E[advantage in bps] of transferring now versus a typical day
-            in the next ``h``. This is the *utility*: money the client saves.
+``p_min``   logistic — P(today is a local minimum of the +-h window). The
+            brief's classification target. Reported, never decisive.
+``u_bps``   ridge — E[advantage in bps] of transferring now versus a typical
+            day in the next ``h``. On its own (lambda = 0) it is worth 5.3 bps,
+            barely distinguishable from a random day.
 ``p_bad``   logistic — P(the average rate over the next ``h`` days turns out
-            more than ``bad_push_bps`` better than what the client just got).
-            Multiplied by the historical size of such a miss it becomes
-            ``risk_bps``: money the client loses by acting on our word.
+            more than ``bad_push_bps`` better than what the client just got),
+            scaled by the historical size of such a miss to give ``risk_bps``.
 
-Utility and risk are deliberately two halves of the *same* quantity. Risk is the
-lower partial moment of the advantage, not a different statistic such as the
-distance to the horizon's luckiest day — that one is positive nearly always on a
-random walk and would drown the utility term without carrying information.
+    score = [u_bps - lambda * risk_bps] - [same objective on an ordinary day]
 
-The decision score is a mean-risk objective in basis points, stated relative to
-an ordinary day in the same corridor::
+The centring is load-bearing: unconditional expected saving is about +15 bps
+against about 155 bps of downside, so an uncentred ``score >= 0`` would silence
+the model everywhere. ``lambda`` is a product parameter, not a fitted one — and
+it is inert here, because the two heads are collinear (-0.37..-0.59, risk with a
+third of utility's spread), so subtracting risk mostly rescales the same
+ranking. Three attempts to rescue the model are recorded in BENCHMARK.md:
+feature set, regularisation strength and lambda. None worked.
 
-    score = [u_bps - lambda * risk_bps] - [base_u_bps - lambda * base_risk_bps]
-
-The bracketed baseline is the same objective evaluated unconditionally on the
-training window, so ``score >= 0`` reads as *"this day is worth a push, an
-ordinary day is not"*. Without that centring the threshold would be vacuous: the
-unconditional expected saving on these corridors is about +15 bps while the
-unconditional downside is about 155 bps, so an absolute ``score >= 0`` rule
-would silence the model on every day of every corridor.
-
-``lambda`` is the only judgement call, and it is a product parameter rather than
-a fitted one: it states how many roubles of missed opportunity the business will
-trade for one rouble of client loss after a push. ``lambda = 0`` is risk-neutral
-expected value; ``lambda = 2`` (the default) reflects that a bad push consumes
-the next contact as well as the current one. The benchmark reports the whole
-sensitivity curve instead of pretending one value is optimal.
-
-Sending on ``score >= 0`` *is* the asymmetric threshold the brief asks for. The
-communication policy then thins whatever survives down to the 1-2 pushes per
-week the channel allows.
+The diagnosis that outlived it: at a signal of roughly 15 bps against a 300 bps
+standard deviation, one robust statistic beats a linear combination fitted to
+that noise. What eventually shipped came from taking that seriously.
 
 Leakage contract
 ----------------

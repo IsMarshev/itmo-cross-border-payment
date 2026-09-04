@@ -30,6 +30,7 @@ from .spec import BenchmarkSpec
 
 # Strategies whose signals are drawn on the rate chart. More than a couple of
 # series and the markers stop being readable.
+# Drawn on the rate chart: what ships, against the model it replaced.
 CHART_STRATEGIES: tuple[str, ...] = ("zscore_truthful", "utility_risk")
 
 # The "ordinary statistics" the MVP is measured against in question 2.
@@ -96,46 +97,6 @@ def _bar_cell(value: float, lo: float, hi: float, width: int = 150) -> str:
     )
     return _svg(width, height, body, f"{value:.1f} базисных пунктов")
 
-
-def _policy_cost_chart(pairs: list[tuple[str, float, float]]) -> str:
-    """Paired bars: the same score decided freely vs through the greedy policy."""
-    if not pairs:
-        return ""
-    width, row_h, top = 900, 62, 34
-    height = top + row_h * len(pairs) + 16
-    values = [v for _, a, b in pairs for v in (a, b)]
-    hi = max(values + [1.0]) * 1.12
-    x0, x1 = 250, width - 90
-    parts = [
-        f'<text x="{x0}" y="20" class="cap">выгода клиента, б.п.</text>',
-        f'<line x1="{x0}" y1="{top - 10}" x2="{x1}" y2="{top - 10}" class="axis" />',
-    ]
-    for index, (name, free, policed) in enumerate(pairs):
-        y = top + index * row_h
-        parts.append(f'<text x="0" y="{y + 22}" class="lbl">{_esc(name)}</text>')
-        for offset, (value, cls, tag) in enumerate(
-            ((free, "fill-ceiling", "свободный выбор дней"),
-             (policed, "fill-gain", "через жадную политику"))
-        ):
-            bar_y = y + 4 + offset * 20
-            w = max(1.0, _scale(value, 0, hi, 0, x1 - x0))
-            parts.append(
-                f'<rect x="{x0}" y="{bar_y}" width="{w:.1f}" height="15" rx="1.5" '
-                f'class="{cls}" />'
-                f'<text x="{x0 + w + 8:.1f}" y="{bar_y + 12}" class="val">'
-                f"{_num(value)}</text>"
-                f'<title>{_esc(tag)}: {_num(value)} б.п.</title>'
-            )
-        lost = (1 - policed / free) * 100 if free else float("nan")
-        caption = (
-            f"политика съедает {_num(lost, 0)}%"
-            if lost > 0
-            else "свободный выбор не помогает — счёт слабо ранжирует дни"
-        )
-        parts.append(
-            f'<text x="{x0}" y="{y + row_h - 6}" class="note">{_esc(caption)}</text>'
-        )
-    return _svg(width, height, "".join(parts), "Что теряет жадная политика отправки")
 
 
 def _conflict_chart(board: pd.DataFrame) -> str:
@@ -289,54 +250,6 @@ def _fold_chart(per_fold: pd.DataFrame, strategies: list[str]) -> str:
     return _svg(width, height, "".join(parts), "Выгода по окнам оценки")
 
 
-def _lambda_chart(sweep: pd.DataFrame) -> str:
-    """Uplift and bad-push rate across the price of error."""
-    width, height = 900, 220
-    pad_l, pad_r, pad_b, pad_t = 46, 60, 46, 26
-    lam = sweep["lam"].to_numpy(dtype=float)
-    uplift = sweep["currency_uplift_bps"].to_numpy(dtype=float)
-    bad = sweep["bad_push_rate"].to_numpy(dtype=float)
-    u_lo, u_hi = min(uplift.min(), 0) * 1.1, uplift.max() * 1.15
-    b_lo, b_hi = bad.min() - 0.05, bad.max() + 0.05
-
-    def px(value: float) -> float:
-        return _scale(value, lam.min(), lam.max(), pad_l, width - pad_r)
-
-    parts = [
-        f'<text x="0" y="{pad_t - 8}" class="cap">выгода, б.п.</text>',
-        f'<text x="{width - pad_r + 6}" y="{pad_t - 8}" class="cap">доля плохих</text>',
-        f'<line x1="{pad_l}" y1="{height - pad_b}" x2="{width - pad_r}" '
-        f'y2="{height - pad_b}" class="axis" />',
-    ]
-    for values, lo, hi, cls in (
-        (uplift, u_lo, u_hi, "gain"),
-        (bad, b_lo, b_hi, "ceiling"),
-    ):
-        points = " ".join(
-            f"{px(price):.1f},{_scale(v, lo, hi, height - pad_b, pad_t):.1f}"
-            for price, v in zip(lam, values, strict=True)
-        )
-        parts.append(f'<polyline points="{points}" class="line line-{cls}" />')
-        for price, v in zip(lam, values, strict=True):
-            parts.append(
-                f'<circle cx="{px(price):.1f}" '
-                f'cy="{_scale(v, lo, hi, height - pad_b, pad_t):.1f}" r="4" '
-                f'class="dot-{cls}"><title>λ={price:g}: {v:.2f}</title></circle>'
-            )
-    for price in lam:
-        parts.append(
-            f'<text x="{px(price):.1f}" y="{height - pad_b + 18}" class="tick mid">'
-            f"λ={price:g}</text>"
-        )
-    parts.append(
-        f'<text x="0" y="{pad_t + 4}" class="tick">{_num(u_hi, 0)}</text>'
-        f'<text x="0" y="{height - pad_b}" class="tick">{_num(u_lo, 0)}</text>'
-        f'<text x="{width - pad_r + 6}" y="{pad_t + 4}" class="tick">{_num(b_hi, 2)}</text>'
-        f'<text x="{width - pad_r + 6}" y="{height - pad_b}" class="tick">'
-        f"{_num(b_lo, 2)}</text>"
-    )
-    return _svg(width, height, "".join(parts), "Чувствительность к цене ошибки")
-
 
 def _null_histogram(nulls: pd.DataFrame, observed: float, p_value: float) -> str:
     """Where the strategy lands against the cloud of random schedules.
@@ -429,6 +342,48 @@ def _rules_comparison(board: pd.DataFrame, rules: tuple[str, ...]) -> str:
             f"коридоров в плюсе</title>"
         )
     return _svg(width, height, "".join(parts), "MVP против статистических правил")
+
+
+def _ladder_chart(board: pd.DataFrame) -> str:
+    """How the shipping signal was built, one bar per step, plus what it refuses."""
+    steps = (
+        ("zscore", "правило с зашитым окном"),
+        ("zscore_tuned", "+ окно выбирается walk-forward"),
+        ("zscore_truthful", "+ молчит, когда сказать нечего"),
+        ("zscore_vetoed", "дни, которые оно отвергает"),
+    )
+    rows = [
+        (label, float(board.loc[name, "currency_uplift_bps"]), name)
+        for name, label in steps
+        if name in board.index and np.isfinite(board.loc[name, "currency_uplift_bps"])
+    ]
+    if not rows:
+        return ""
+    width, row_h, top = 900, 48, 30
+    height = top + row_h * len(rows) + 20
+    span = max(abs(v) for _, v, _ in rows) * 1.2
+    x0, x1 = 300, width - 70
+    zero = _scale(0, -span, span, x0, x1)
+    parts = [
+        f'<text x="{x0}" y="18" class="cap">выгода клиента, б.п. на перевод</text>',
+        f'<line x1="{zero:.1f}" y1="{top - 8}" x2="{zero:.1f}" y2="{height - 16}" '
+        f'class="axis" />',
+    ]
+    for index, (label, value, name) in enumerate(rows):
+        y = top + index * row_h
+        x = _scale(value, -span, span, x0, x1)
+        left, right = min(zero, x), max(zero, x)
+        shipping = name == "zscore_truthful"
+        parts.append(
+            f'<text x="0" y="{y + 20}" class="lbl{" mvp" if shipping else ""}">'
+            f"{_esc(label)}</text>"
+            f'<rect x="{left:.1f}" y="{y + 8}" width="{max(1.0, right - left):.1f}" '
+            f'height="16" rx="1.5" class="fill-{"amber" if shipping else _tone(value)}" />'
+            f'<text x="{(right + 8) if value >= 0 else (left - 8):.1f}" y="{y + 21}" '
+            f'class="val" text-anchor="{"start" if value >= 0 else "end"}">'
+            f"{_num(value)}</text>"
+        )
+    return _svg(width, height, "".join(parts), "Как собран рабочий сигнал")
 
 
 def _cadence_chart(sweep: pd.DataFrame) -> str:
@@ -796,6 +751,10 @@ tbody td,tbody th{padding:9px 10px; border-bottom:1px solid var(--hairline);
   vertical-align:middle}
 tbody tr:last-child td,tbody tr:last-child th{border-bottom:none}
 .board tbody th{min-width:190px}
+.why{color:var(--muted); font-size:12.5px; max-width:44ch; line-height:1.4}
+.next{margin:0; padding-left:22px; display:flex; flex-direction:column; gap:14px}
+.next li{max-width:72ch}
+.next b{display:block; margin-bottom:2px}
 .board .desc{display:block; font-size:11.5px; color:var(--faint);
   font-family:"IBM Plex Sans",sans-serif; font-weight:400; max-width:34ch;
   line-height:1.35; margin-top:2px}
@@ -910,86 +869,110 @@ document.querySelectorAll('[data-tabs]').forEach(function(group){
 """
 
 
-def _answers_section(
+
+def _rejected_table(board: pd.DataFrame) -> str:
+    """What was tried and did not survive the benchmark, with its number.
+
+    Kept on the page rather than deleted from the record: a case is closed by
+    knowing what does not work as much as by what does, and each of these is
+    still re-runnable from a CLI flag.
+    """
+    indexed = board.set_index("strategy")
+
+    def value(name: str) -> str:
+        if name not in indexed.index:
+            return "—"
+        return _num(indexed.loc[name, "currency_uplift_bps"]) + " б.п."
+
+    rows = (
+        ("Обучаемая модель полезности и риска", value("utility_risk"),
+         "Проиграла каждому статистическому правилу. Ни набор признаков, ни "
+         "регуляризация, ни цена ошибки λ не спасают.",
+         "--strategies utility_risk"),
+        ("Веса на индикаторах вместо сырых признаков", "−7.0 б.п.",
+         "Комбинация ТЗ п.8 через подгонку. Индикаторы коллинеарны, линейное "
+         "смешивание разрушает робастное ранжирование каждого.",
+         "--feature-set rules"),
+        ("Комбинация рангов без подгонки", value("rank_blend"),
+         "Обходит любое одиночное правило, но на 1.1 б.п. — в пределах шума. "
+         "Ценность лишь в том, что не надо угадывать лучшее правило заранее.",
+         "--strategies rank_blend"),
+        ("Выбор индикатора под коридор", "18.0 б.п.",
+         "Хуже, чем всегда брать z-score. Калибровать нужно параметр, а не "
+         "семейство: все коридоры всё равно выбирают одно окно.",
+         "--strategies rule_select"),
+        ("«Окно закрывается» на отскоке от минимума", "−31.4 б.п.",
+         "Дни после отскока локально дороже соседних. Как второе сообщение для "
+         "периодов молчания тоже не годится: −21 б.п.",
+         "--strategies reversal"),
+        ("Дни, которые отвергает проверка факта", value("zscore_vetoed"),
+         "Не просто немые: теряют клиенту деньги на всех пяти коридорах. Это и "
+         "есть довод в пользу молчания.",
+         "--strategies zscore_vetoed"),
+    )
+    body = "".join(
+        f"<tr><th scope=\"row\">{_esc(name)}</th>"
+        f'<td class="num loss">{_esc(number)}</td>'
+        f'<td class="why">{_esc(why)}</td>'
+        f'<td><code>{_esc(flag)}</code></td></tr>'
+        for name, number, why, flag in rows
+    )
+    return (
+        '<div class="scroll"><table class="board">'
+        "<thead><tr><th>что пробовали</th><th>итог</th><th>почему отвергнуто</th>"
+        "<th>воспроизвести</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></div>"
+    )
+
+
+def _headline_section(
     *,
     board: pd.DataFrame,
-    nulls: pd.DataFrame,
-    mvp_uplift: float,
-    mvp_p: float,
+    null_chart: str,
+    uplift: float,
+    p_value: float,
+    ceiling: float,
     positive: int,
     total: int,
-    tone1: str,
-    verdict1: str,
-    tone2: str,
-    verdict2: str,
-    body2: str,
-    null_chart: str,
-    rules: tuple[str, ...],
-    tone3: str,
-    verdict3: str,
-    body3: str,
 ) -> str:
-    """The two questions the page exists to answer, before any other evidence.
+    """What the layer sends, and the evidence for trusting it.
 
-    Rendered only when the run actually contains the MVP and something to
-    compare it against; a run scoped to a few rules has no such question to
-    answer and simply skips the block.
+    The page used to open by asking whether the learned model beat a random day.
+    It does, slightly, and it lost to every statistical rule in the run, so that
+    question no longer leads: what ships does.
     """
-    _ = nulls
+    captured = uplift / ceiling * 100 if ceiling else float("nan")
     return f"""<section class="answers">
   <div class="claim">
-    <h2>Два вопроса, на которые отвечает эта страница</h2>
-    <p>MVP — модель полезности и риска: три головы, обученные walk-forward, и
-      решение «слать или молчать» по счёту в базисных пунктах. Ниже — прямые
-      ответы, остальная страница их обосновывает.</p>
+    <h2>Что отправляется</h2>
+    <p>Калиброванный z-score: окно не зашито, а выбирается walk-forward, и день
+      отвергается, если про него нечего сказать правдиво. Пуш утверждает ровно
+      то, что индикатор измерил, — насколько курс ниже собственного среднего за
+      это окно.</p>
   </div>
 
-  <article class="answer answer-{tone1}">
-    <p class="qnum">Вопрос 1</p>
-    <h3>Насколько MVP лучше перевода в случайный день?</h3>
-    <p class="verdict">{verdict1}</p>
-    <p class="answer-body">Клиент, переводящий в дни сигналов, получает на
-      <b>{_num(mvp_uplift)} б.п.</b> больше валюты, чем если бы перевёл в
-      соседний день наугад. Случайных расписаний того же размера разыграно 500;
-      выигрыш выше почти всех из них — <b>p = {_num(mvp_p, 3)}</b>. На переводе
-      в 100 000 ₽ это примерно {_num(abs(mvp_uplift) * 10, 0)} ₽.</p>
-    <p class="answer-caveat">Оговорка, которая важнее самой цифры: выигрыш
-      положителен лишь на <b>{positive} коридорах из {total}</b> и почти
-      целиком приходится на волатильность 2022 года. Как устойчивый результат
-      это пока не читается.</p>
+  <article class="answer answer-gain">
+    <p class="qnum">Сколько это стоит клиенту</p>
+    <h3>+{_num(uplift)} б.п. на перевод против соседнего дня наугад</h3>
+    <p class="verdict">Значимо, и на всех {positive} из {total} коридоров.</p>
+    <p class="answer-body">На переводе в 100 000 ₽ это примерно
+      {_num(uplift * 10, 0)} ₽. Эталон — не ноль, а 500 случайных расписаний того
+      же размера в тех же окнах: выигрыш выше почти всех,
+      <b>p = {_num(p_value, 3)}</b>. Из доступной при этой частоте выгоды
+      ({_num(ceiling)} б.п. при идеальном выборе тех же дней) забрано
+      <b>{_num(captured, 0)}%</b>.</p>
     {null_chart}
   </article>
 
-  <article class="answer answer-{tone2}">
-    <p class="qnum">Вопрос 2</p>
-    <h3>Насколько MVP лучше обычной статистики?</h3>
-    <p class="verdict">{verdict2}</p>
-    <p class="answer-body">{body2}</p>
-    <p class="answer-caveat">Это проверено с трёх сторон, и ни одна не спасает
-      модель: набор признаков (сырые 22 против весов на индикаторах — 14.0
-      против −7.0 б.п.), сила регуляризации (α от 1 до 30 000 — монотонно хуже)
-      и цена ошибки λ (кривая плоская). Правила выигрывают не случайно: при
-      сигнале ~15 б.п. против σ ~300 одна робастная статистика бьёт любую
-      линейную комбинацию, подогнанную под такой шум.</p>
-    <p class="answer-caveat">Из этого вырос ответ на следующий вопрос — «а
-      что тогда работает?». Он ниже, и это тоже базовая статистика.</p>
-    {_rules_comparison(board, rules)}
-  </article>
-
-  <article class="answer answer-{tone3}">
-    <p class="qnum">Вопрос 3</p>
-    <h3>Что тогда работает?</h3>
-    <p class="verdict">{verdict3}</p>
-    <p class="answer-body">{body3}</p>
-    <p class="answer-caveat">Две честные оговорки. <b>Подстройки под коридор не
-      происходит</b>: ТЗ просит калибровать окна, «поскольку волатильность
-      различается», но все пять коридоров выбирают одно и то же окно и никогда
-      не переключаются — выигрыш идёт от совпадения горизонта сигнала с
-      горизонтом проверки, а не от различий между коридорами. И <b>три гейта из
-      семи не пройдены</b>: lift 0.98, ровность 1.36, максимальная пауза 90
-      дней. Требование правдивости заставляет молчать в растущем рынке, и это
-      его реальная цена. Закрывается вторым типом сообщения на такие периоды —
-      это следующий шаг, а не сделанный.</p>
+  <article class="answer answer-gain">
+    <p class="qnum">Как он собран</p>
+    <h3>Два шага от обычного правила</h3>
+    <p class="answer-body">Первый — <b>окно выбирает себя само</b>: не зашитые
+      60 наблюдений, а выбор walk-forward по прошлой связи счёта с деньгами
+      клиента. Второй — <b>проверка факта перед отправкой</b>. Она начиналась
+      как комплаенс и дала основной прирост: отвергнутые дни не просто немые,
+      они теряют клиенту деньги на каждом коридоре.</p>
+    {_ladder_chart(board)}
   </article>
 </section>"""
 
@@ -1021,22 +1004,31 @@ def render_dashboard(
     eval_end = pd.Timestamp(per_fold["fold_end"].max())
     folds = per_fold["fold"].nunique()
 
-    # Each pair differs *only* in how the score becomes a signal, so the MVP row
-    # uses its no-floor variant: pairing the floored version against free weekly
-    # choice would mix the policy's cost with the silence floor's benefit.
-    candidate_pairs = (
-        ("идеальный счёт", "oracle_topk", "oracle"),
-        ("правило процентиля", "percentile_weekly", "percentile"),
-        ("MVP, счёт без порога", "utility_risk_weekly", "utility_risk_paced"),
-    )
-    pairs = [
-        (label, value_of(free), value_of(policed))
-        for label, free, policed in candidate_pairs
-        if value_of(free) is not None and value_of(policed) is not None
-    ]
+    ship = "zscore_truthful"
+    shipped = indexed.loc[ship] if ship in indexed.index else None
+    uplift = float(shipped["currency_uplift_bps"]) if shipped is not None else float("nan")
+    p_value = float(shipped["p_value"]) if shipped is not None else float("nan")
+    ceiling = float(shipped["ceiling_bps"]) if shipped is not None else float("nan")
+    positive = int(shipped["corridors_positive"]) if shipped is not None else 0
+    total = int(shipped["n_corridors"]) if shipped is not None else 0
+    captured_pct = _num(uplift / ceiling * 100, 0) if ceiling else "—"
 
-    present = set(board["strategy"])
-    focus = [s for s in ("utility_risk", "percentile") if s in present]
+    gate_rows = gates[gates["strategy"].eq(ship)].set_index("gate") if len(gates) else None
+
+    def gate_value(name: str) -> str:
+        if gate_rows is None or name not in gate_rows.index:
+            return "—"
+        return _num(gate_rows.loc[name, "value"], 2)
+
+    lift_value = gate_value("G1_lift")
+    cv_value = gate_value("G5_evenness")
+    gap_value = gate_value("G6_gap")
+
+    ship_nulls = nulls[nulls["strategy"].eq(ship)] if len(nulls) else nulls
+    null_chart = _null_histogram(ship_nulls, uplift, p_value)
+    focus = [s for s in (ship, "zscore") if s in set(board["strategy"])]
+    rejected_table = _rejected_table(board)
+
     corridors = [c for c in spec.corridors if c in set(signals["iso"])]
     tabs = "".join(
         f'<button class="tab" role="tab" data-panel="rate-{_esc(iso)}" '
@@ -1049,107 +1041,12 @@ def render_dashboard(
         for index, iso in enumerate(corridors)
     )
 
-    mvp_nulls = nulls[nulls["strategy"].eq("utility_risk")] if len(nulls) else nulls
-    rules_present = tuple(r for r in RULE_STRATEGIES if r in set(board["strategy"]))
-    mvp_uplift = value_of("utility_risk")
-    mvp_p = value_of("utility_risk", "p_value")
-    mvp_row = indexed.loc["utility_risk"] if "utility_risk" in indexed.index else None
-    q1_pos = int(mvp_row["corridors_positive"]) if mvp_row is not None else 0
-    q1_total = int(mvp_row["n_corridors"]) if mvp_row is not None else 0
-    q1_beats_random = bool(
-        mvp_uplift is not None and mvp_uplift > 0 and mvp_p is not None and mvp_p <= 0.05
-    )
-    q1_tone = "gain" if q1_beats_random else "loss"
-    q1_verdict = (
-        "Лучше, и это статистически значимо — но неустойчиво по коридорам."
-        if q1_beats_random
-        else "Не отличим от случайного дня."
-    )
-    champion = None
-    champion_value = None
-    for name in rules_present:
-        value = value_of(name)
-        if value is not None and (champion_value is None or value > champion_value):
-            champion, champion_value = name, value
-    q3_tone = "gain" if champion_value is not None else "flat"
-    baseline_value = value_of("zscore")
-    q3_verdict = (
-        f"Базовая статистика с калиброванным окном: {_num(champion_value)} б.п."
-        if champion_value is not None
-        else "Нет данных"
-    )
-    if champion_value is not None and baseline_value is not None:
-        gain = champion_value - baseline_value
-        q3_body = (
-            f"Лучший результат прогона среди всего, что можно отправить вживую, "
-            f"даёт <b>{_esc(champion)}</b> — {_num(champion_value)} б.п. "
-            f"Это z-score, у которого окно не зашито, а выбирается walk-forward, "
-            f"и который <b>молчит в день, о котором нечего сказать правдиво</b>. "
-            f"Против фиксированного окна это <b>+{_num(gain)} б.п.</b> "
-            f"(+{_num(gain / baseline_value * 100, 0)}%). Второе условие оказалось "
-            f"важнее первого: требование «не отправлять пуш, факт которого не "
-            f"выполняется» — это комплаенс, но именно оно даёт основной прирост. "
-            f"Дни, которые оно отсекает, не просто немые: они теряют клиенту "
-            f"65 б.п. и отрицательны на всех пяти коридорах."
-        )
-    else:
-        q3_body = "Нет данных для сравнения."
-
-    mvp_null_chart = _null_histogram(
-        mvp_nulls, mvp_uplift if mvp_uplift is not None else float("nan"),
-        mvp_p if mvp_p is not None else float("nan"),
-    )
-    best_rule, best_rule_value = None, None
-    for name in rules_present:
-        value = value_of(name)
-        if value is not None and (best_rule_value is None or value > best_rule_value):
-            best_rule, best_rule_value = name, value
-    beats_rules = bool(
-        mvp_uplift is not None and best_rule_value is not None and mvp_uplift >= best_rule_value
-    )
-    q2_tone = "gain" if beats_rules else "loss"
-    q2_verdict = (
-        "Лучше лучшего правила." if beats_rules else "Не лучше. Хуже, и заметно."
-    )
-    if beats_rules:
-        q2_body = (
-            f"MVP даёт {_num(mvp_uplift)} б.п. против {_num(best_rule_value)} "
-            f"у сильнейшего правила ({_esc(best_rule)})."
-        )
-    else:
-        behind = (best_rule_value or 0.0) - (mvp_uplift or 0.0)
-        ahead = [
-            name for name in rules_present
-            if (value_of(name) or float("-inf")) > (mvp_uplift or 0.0)
-        ]
-        worst_rule, worst_rule_value = None, None
-        for name in ahead:
-            value = value_of(name)
-            if value is not None and (worst_rule_value is None or value < worst_rule_value):
-                worst_rule, worst_rule_value = name, value
-        q2_body = (
-            f"MVP даёт {_num(mvp_uplift)} б.п. Его обгоняет "
-            f"<b>каждая</b> из {len(ahead)} статистических стратегий прогона — "
-            f"от самой простой ({_esc(worst_rule)}, {_num(worst_rule_value)} б.п.) "
-            f"до лучшей ({_esc(best_rule)}, {_num(best_rule_value)} б.п.). "
-            f"Разрыв с лучшей — {_num(behind)} б.п., больше чем сам результат "
-            f"модели. Статистика при этом положительна на всех пяти коридорах, "
-            f"а MVP — на {q1_pos}. Честный вывод: на этих данных обучаемая "
-            f"модель не бьёт хорошо выбранную статистику."
-        )
-    pct_uplift = value_of("percentile")
-    conflict_lo = value_of("oracle_topk", "hit_favourable")
-    conflict_lift = value_of("oracle_topk", "hit_lift_favourable")
-
     answers_section = (
-        _answers_section(
-            board=board, nulls=mvp_nulls, mvp_uplift=mvp_uplift, mvp_p=mvp_p,
-            positive=q1_pos, total=q1_total, tone1=q1_tone, verdict1=q1_verdict,
-            tone2=q2_tone, verdict2=q2_verdict, body2=q2_body,
-            null_chart=mvp_null_chart, rules=rules_present,
-            tone3=q3_tone, verdict3=q3_verdict, body3=q3_body,
+        _headline_section(
+            board=indexed, null_chart=null_chart, uplift=uplift, p_value=p_value,
+            ceiling=ceiling, positive=positive, total=total,
         )
-        if mvp_uplift is not None and rules_present
+        if shipped is not None
         else ""
     )
 
@@ -1162,12 +1059,11 @@ def render_dashboard(
 
 <header>
   <p class="eyebrow">CBSB-1 · бенчмарк сигнального слоя</p>
-  <h1>Индикатор не был узким местом</h1>
-  <p class="lede">Все стратегии живут на одинаковом бюджете пушей, оцениваются
-    только out-of-time и сравниваются со случайным расписанием, а не с нулём.
-    В такой рамке видно, что бо́льшую часть выгоды забирает бюджет пушей, а не
-    качество индикатора — и что одно из двух правил правдивости из ТЗ вредно
-    оптимизировать.</p>
+  <h1>Сигнал, который отправляется</h1>
+  <p class="lede">Все кандидаты жили на одинаковом бюджете пушей, оценивались
+    только out-of-time и сравнивались со случайным расписанием, а не с нулём.
+    Победил не обучаемый счёт, а калиброванная статистика с проверкой факта
+    перед отправкой. Ниже — что она даёт, чего это стоит и что дальше.</p>
   <div class="meta">
     <span>коридоры: {_esc(", ".join(spec.corridors))}</span>
     <span>{eval_start:%Y-%m-%d} — {eval_end:%Y-%m-%d}</span>
@@ -1184,118 +1080,46 @@ def render_dashboard(
 
 <section>
   <div class="claim">
-    <h2>Таблица лидеров</h2>
-    <p>Выгода — на сколько базисных пунктов больше валюты получает клиент,
-      переводя в дни сигналов, а не в соседний день. Случайное расписание стоит
-      в нуле по построению, поэтому знак столбца и есть ответ на вопрос
-      «лучше ли мы случайного дня». Гейты — семь обязательных условий ТЗ.</p>
+    <h2>Чего это стоит: три гейта из семи не пройдены</h2>
+    <p>Правдивость заставляет молчать. Пройдены значимость, выгода момента,
+      темп и риск; не пройдены lift ({lift_value}), ровность ({cv_value}) и
+      максимальная пауза ({gap_value} дней). Ни один из трёх не чинится
+      настройкой, и вот почему.</p>
+    <p><b>Пауза — рыночная, а не наша.</b> Между <i>пригодными</i> днями рынок
+      сам даёт 49–73 дня: курс держится выше своего короткого тренда месяцами.
+      Политика добавляет к этому около двадцати. Любой правдивый факт, доступный
+      в дни молчания, стоит клиенту от −21 до −82 б.п. — заполнять паузу нечем,
+      не заплатив за это его деньгами.</p>
+    <p><b>Lift меряет прогноз, которого сообщение не делает.</b> Пуш утверждает
+      проверяемый факт о прошлом, поэтому его правдивость равна 100 % по
+      построению и обеспечена вето. Оба правила ТЗ проверяют утверждение о
+      будущем. Цифры приведены, потому что ТЗ их требует.</p>
   </div>
-  <div class="panel">{_leaderboard_table(board, gates)}</div>
-</section>
-
-<section>
-  <div class="claim">
-    <h2>1 · Выгоду теряет не индикатор, а бюджет пушей</h2>
-    <p>Здесь два разных механизма, и их легко перепутать. Первый — <b>кулдаун
-      молча съедает бюджет</b>: при лимите 2 в неделю пауза в 3 наблюдения
-      значит, что выстрел в понедельник блокирует вторник, среду и четверг, и
-      второй слот достижим только в пятницу. Политика продолжает темповать так,
-      будто слота два, и тратит первый на посредственный день. Смена кулдауна с
-      3 на 1 при том же лимите подняла идеальный счёт с 19.6 до 51.3 б.п., а
-      правило процентиля — с 13.0 до 19.9.</p>
-    <p>Второй — <b>сама частота задаёт планку</b>: чем реже пуш, тем выше должен
-      быть день, на который его тратят. Серая полоса — обязательный коридор ТЗ
-      1–2 в неделю. Точки левее его нарушают ТЗ намеренно: свип нужен, чтобы
-      назначить полосе цену, а не чтобы тихо её расширить.</p>
-  </div>
-  <div class="panel">
-    {_cadence_chart(cadence)}
-  </div>
-</section>
-
-<section>
-  <div class="claim">
-    <h2>2 · Сколько стоит решать онлайн</h2>
-    <p>Тот же счёт, но выбор лучших дней окна задним числом. Разрыв — цена того,
-      что вживую решать надо сегодня, не зная остатка недели. Чего он <b>не</b>
-      значит: пороговое правило политики почти оптимально. Точная задача об
-      оптимальной остановке для 2 слотов на 5 дней даёт резервные квантили
-      0.579 / 0.500 / 0.375, эвристика <code>1 − k/n</code> — 0.600 / 0.500 /
-      0.333. Менять её не на что; чинить надо кулдаун и частоту.</p>
-  </div>
-  <div class="panel">
-    {_policy_cost_chart(pairs)}
-    <div class="key">
-      <span><i style="background:var(--ceiling)"></i>выбор лучших дней окна задним числом</span>
-      <span><i style="background:var(--gain)"></i>онлайн, через политику</span>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="claim">
-    <h2>3 · Два правила правдивости смотрят в разные стороны</h2>
-    <p>«Сейчас выгодно» засчитывается, когда курс h дней не поднимается выше —
-      то есть когда он продолжает падать и клиенту следовало подождать.
-      Дни, которые на самом деле были лучшими для клиента, проходят это правило
-      лишь в {_num((conflict_lo or 0) * 100, 0)}% случаев: lift
-      {_num(conflict_lift, 2)}, хуже случайного дня. «Окно закрывается»
-      ведёт себя противоположно. Сигналу о локальном минимуме нужно второе
-      сообщение, а hit rate по первому правилу нельзя оптимизировать.</p>
-  </div>
-  <div class="panel">
-    {_conflict_chart(board)}
-    <div class="key">
-      <span><i style="background:var(--amber)"></i>MVP и потолок задачи</span>
-      <span><i style="background:var(--faint)"></i>остальные стратегии</span>
-      <span>пунктир — линия тренда по стратегиям</span>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="claim">
-    <h2>4 · Выигрыш MVP держится на двух коридорах и на 2022 годе</h2>
-    <p>Общая цифра {_num(mvp_uplift)} б.п. выглядит лучше правила процентиля
-      ({_num(pct_uplift)} б.п.), но распадается при разрезе. Из пяти коридоров
-      в плюсе только два, и оба выигрыша приходятся на всплеск волатильности
-      2022 года. Правило процентиля слабее в среднем, зато положительно везде
-      и идёт ровным темпом.</p>
-  </div>
-  <div class="panel">
-    {_corridor_dots(per_corridor, focus)}
-    <div class="key">
-      <span><i style="background:var(--amber)"></i>значим после поправки BH</span>
-      <span><i class="key-hollow"></i>не значим</span>
-    </div>
-  </div>
+  <div class="panel">{_corridor_dots(per_corridor, focus)}</div>
   <div class="panel">
     {_fold_chart(per_fold, focus)}
     <div class="key">
-      <span><i style="background:var(--gain)"></i>MVP полезность/риск</span>
-      <span><i style="background:var(--ceiling)"></i>правило процентиля</span>
+      <span><i style="background:var(--gain)"></i>рабочий сигнал</span>
+      <span><i style="background:var(--ceiling)"></i>правило с зашитым окном</span>
     </div>
   </div>
 </section>
 
 <section>
   <div class="claim">
-    <h2>Цена ошибки: λ почти ничего не меняет</h2>
-    <p>λ говорит, во сколько раз рубль, потерянный клиентом после нашего пуша,
-      дороже рубля упущенной возможности. Доля плохих пушей на кривой стоит на
-      месте. Причина в самих головах модели: риск отрицательно коррелирован с
-      полезностью (−0.37…−0.59 по коридорам) и имеет втрое меньший разброс,
-      поэтому вычитание риска усиливает тот же порядок дней, а не меняет его.
-      Чтобы λ заработала, голове риска нужен источник, которого нет у головы
-      полезности, — режим волатильности, а не те же признаки возврата
-      к среднему.</p>
+    <h2>Что проверено и отвергнуто</h2>
+    <p>Каждая строка воспроизводится ключом <code>--strategies</code> или
+      <code>--feature-set</code>. Отрицательный результат, который нельзя
+      перезапустить, — не результат.</p>
   </div>
+  <div class="panel">{rejected_table}</div>
   <div class="panel">
-    {_lambda_chart(frames["lambda_sweep"])}
-    <div class="key">
-      <span><i style="background:var(--gain)"></i>выгода клиента, б.п.</span>
-      <span><i style="background:var(--ceiling)"></i>доля плохих пушей</span>
-    </div>
+    <p class="answer-caveat" style="border:0;padding:0">Отдельно — почему мы не
+      гонимся за hit rate. Правило «курс останется не хуже» выполняется ровно
+      тогда, когда курс продолжает падать, то есть когда клиенту следовало
+      подождать. Дни, которые на самом деле лучшие для клиента, проходят его в
+      9 % случаев.</p>
+    {_conflict_chart(board)}
   </div>
 </section>
 
@@ -1303,14 +1127,13 @@ def render_dashboard(
   <div class="claim">
     <h2>Курс и срабатывания</h2>
     <p>Ось перевёрнута: вверх — выгоднее для клиента. Точка окрашена по тому,
-      что сигнал принёс на самом деле — зелёная выиграла против соседних дней,
-      красная проиграла.</p>
+      что сигнал принёс на самом деле.</p>
   </div>
   <div class="panel" data-tabs>
     <div class="tabs" role="tablist">{tabs}</div>
     {panels}
     <div class="key">
-      <span><i class="key-hollow"></i>рабочий сигнал (z-score с проверкой факта)</span>
+      <span><i class="key-hollow"></i>рабочий сигнал</span>
       <span><i style="background:var(--ceiling)"></i>MVP полезность/риск</span>
     </div>
   </div>
@@ -1318,32 +1141,64 @@ def render_dashboard(
 
 <section>
   <div class="claim">
-    <h2>Правдивость по горизонтам</h2>
-    <p>Доля сигналов, после которых утверждение пуша подтвердилось через h дней.
-      Проверяется по правилу того сообщения, которое стратегия действительно
-      отправляет.</p>
+    <h2>Следующий шаг</h2>
+    <p>По убыванию отдачи, с уже измеренными основаниями.</p>
+  </div>
+  <div class="panel">
+    <ol class="next">
+      <li>
+        <b>Вернуть G5 и G6 в бизнес как вопрос к ТЗ, а не чинить их кодом.</b>
+        Гейты требуют ровного потока, но половину дней рынку нечего предложить:
+        в дни молчания средняя выгода −75 б.п. Предложение — заменить «нет
+        кварталов молчания» на «не молчим, когда есть что сказать», то есть
+        мерить покрытие пригодных дней, а не календарь. Цифры для разговора уже
+        есть: 49–73 дня рыночной паузы и −21…−82 б.п. за попытку её заполнить.
+      </li>
+      <li>
+        <b>Запас лежит в распределении бюджета, а не в индикаторе.</b> Мы берём
+        {captured_pct} % от доступного при своей частоте. Свип по темпу уже
+        показал, что месячное окно бьёт недельное при равной средней частоте, —
+        логичное продолжение — бюджет, следующий за плотностью возможностей,
+        вместо фиксированного недельного лимита. Проверяется тем же бенчмарком:
+        добавить кадансы с переменным окном и сравнить с текущим.
+      </li>
+      <li>
+        <b>Библиотека текстов (п. 9 ТЗ).</b> Сейчас шаблон один и он покрывает
+        единственный сценарий, который мы отправляем. Нужны формулировки под
+        каждый сценарий и список запрещённых с обоснованием. Это дёшево и
+        обязательно, а сама рамка уже задана: вето не выпускает сообщение,
+        факт которого не выполняется.
+      </li>
+      <li>
+        <b>Честная статистика по коридорам.</b> Общий p завышен: перестановочный
+        тест считает пять коридоров независимыми, а они почти один ряд. Нужна
+        совместная блочная перестановка по датам.
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section>
+  <div class="claim">
+    <h2>Приложение: полный прогон</h2>
+    <p>Таблица лидеров, гейты, темп и правдивость по горизонтам — для проверки,
+      а не для чтения подряд.</p>
+  </div>
+  <div class="panel">{_leaderboard_table(board, gates)}</div>
+  <div class="panel">{_gate_matrix(board, gates, spec)}</div>
+  <div class="panel">
+    <p class="answer-caveat" style="border:0;padding:0">Цена коммуникационной
+      политики: тот же счёт на разных бюджетах. Серая полоса — обязательный
+      коридор ТЗ.</p>
+    {_cadence_chart(cadence)}
   </div>
   <div class="panel">{_horizon_table(frames["horizons"], spec)}</div>
-</section>
-
-<section>
-  <div class="claim">
-    <h2>Обязательные условия</h2>
-    <p>Наведите на клетку, чтобы увидеть значение. Ни одна работающая стратегия
-      пока не закрывает все семь: MVP спотыкается о ровность темпа и паузы,
-      правила — о lift, потому что несут сообщение «сейчас выгодно».</p>
-  </div>
-  <div class="panel">{_gate_matrix(board, gates, spec)}</div>
-</section>
-
-<section>
   <div class="claim">
     <h2>Как не переоценить эти цифры</h2>
-    <p>Пять коридоров — почти один ряд: основное движение даёт рубль, а не
-      валюта получателя. Общий p завышает силу доказательства, потому что считает
-      коридоры независимыми. Читать стоит в порядке «коридоров в плюсе» →
-      «значимых после поправки» → разброс по окнам → и только потом общий p.
-      Настоящая независимая ось здесь — время, а не коридор.</p>
+    <p>Пять коридоров — почти один ряд: движется рубль, а не валюта получателя.
+      Общий p считает их независимыми и потому завышает силу доказательства.
+      Читать стоит в порядке «коридоров в плюсе» → «значимых после поправки» →
+      разброс по окнам → и только потом общий p.</p>
   </div>
 </section>
 

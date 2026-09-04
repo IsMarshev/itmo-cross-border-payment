@@ -17,7 +17,7 @@ from .benchmark.dashboard import build_dashboard
 from .benchmark.report import render_console_summary, render_scorecard
 from .benchmark.runner import run_benchmark
 from .benchmark.spec import BenchmarkSpec
-from .benchmark.strategies import DEFAULT_STRATEGY_NAMES
+from .benchmark.strategies import ALL_STRATEGY_NAMES, DEFAULT_STRATEGY_NAMES
 from .config import Settings
 from .data.normalization import read_rate_directory
 from .utility_risk import UtilityRiskConfig
@@ -26,7 +26,10 @@ from .utility_risk import UtilityRiskConfig
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the CBSB-1 signal benchmark")
     parser.add_argument("--corridors", nargs="+", default=["TJS", "UZS", "KGS", "AMD", "KZT"])
-    parser.add_argument("--strategies", nargs="+", default=list(DEFAULT_STRATEGY_NAMES))
+    parser.add_argument(
+        "--strategies", nargs="+", default=list(DEFAULT_STRATEGY_NAMES),
+        help=f"default is the story set; everything available: {', '.join(ALL_STRATEGY_NAMES)}",
+    )
     parser.add_argument("--data-dir", default=None, help="directory of rates_<ISO>.csv files")
     parser.add_argument("--out", default="reports/benchmark")
     parser.add_argument("--eval-start", default="2021-09-01")
