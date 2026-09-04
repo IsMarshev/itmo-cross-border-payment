@@ -98,7 +98,7 @@ GATES: tuple[Gate, ...] = (
         question="Темп укладывается в коммуникационную политику?",
         metric="per_week",
         op="between",
-        bound=(0.5, 2.0),
+        bound=(1.0, 2.0),
     ),
     Gate(
         name="G5_evenness",
@@ -121,6 +121,49 @@ GATES: tuple[Gate, ...] = (
         op="<=",
         bound=0.0,
     ),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Cadence:
+    """One communication budget: how many pushes, how far apart.
+
+    ``cooldown`` is in trading observations and interacts with the budget more
+    sharply than it looks. A cooldown of 3 inside a five-day week means a push
+    on Monday blocks Tuesday through Thursday, so the second weekly slot can
+    only ever land on Friday — the policy pays for a budget it cannot spend, and
+    fires early on a mediocre day rather than waiting for the good one.
+    """
+
+    label: str
+    window: str  # "week" | "month"
+    max_per_window: int
+    cooldown: int
+
+    @property
+    def per_week(self) -> float:
+        """Nominal pushes per week, for ordering the sweep."""
+        return self.max_per_window / (1.0 if self.window == "week" else 4.35)
+
+
+# The cadence sweep: what the communication policy costs, in the currency the
+# business cares about. The brief prescribes 1-2 signals per corridor per week,
+# but a remitter transfers 1-3 times a *month*, so the prescribed band spends
+# roughly four times more pushes than the client has transfers. This grid puts
+# a number on that trade-off instead of arguing about it.
+# The last three points sit *below* the brief's mandatory 1-2 per week. They are
+# scored anyway, and they fail G4 on purpose: the sweep exists to price the band,
+# not to quietly widen it. The brief justifies the lower bound by pilot sample
+# size rather than by product need, and at 0.6/week five corridors over five
+# years still yield ~800 signals, so that rationale is worth revisiting with the
+# numbers in hand.
+CADENCE_GRID: tuple[Cadence, ...] = (
+    Cadence("2/нед, кулдаун 3", "week", 2, 3),
+    Cadence("2/нед, кулдаун 1", "week", 2, 1),
+    Cadence("1/нед", "week", 1, 1),
+    Cadence("4/мес", "month", 4, 3),
+    Cadence("2/мес", "month", 2, 3),
+    Cadence("1/мес", "month", 1, 3),
 )
 
 
@@ -157,8 +200,11 @@ class BenchmarkSpec:
     fold_months: int = 6
 
     # --- communication policy, identical for every strategy ---
-    max_signals_per_week: int = 2
-    cooldown_observations: int = 3
+    cadence: Cadence = Cadence("2/нед, кулдаун 1", "week", 2, 1)
+    """The headline budget. Cooldown 1 rather than 3: at the same weekly budget
+    a three-day cooldown costs perfect foresight 32 bps of client money by
+    blocking the good day of the week (measured, see the cadence sweep)."""
+    cadence_grid: tuple[Cadence, ...] = CADENCE_GRID
     threshold_lookback: int = 250
     minimum_threshold_history: int = 20
 
@@ -169,6 +215,11 @@ class BenchmarkSpec:
     fdr_alpha: float = 0.05
 
     gates: tuple[Gate, ...] = field(default=GATES)
+
+    @property
+    def max_signals_per_week(self) -> float:
+        """Nominal weekly push budget implied by the headline cadence."""
+        return self.cadence.per_week
 
     def __post_init__(self) -> None:
         if self.horizon <= 0:

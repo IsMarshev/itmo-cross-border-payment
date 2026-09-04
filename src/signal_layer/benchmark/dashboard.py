@@ -332,6 +332,68 @@ def _lambda_chart(sweep: pd.DataFrame) -> str:
     return _svg(width, height, "".join(parts), "Чувствительность к цене ошибки")
 
 
+def _cadence_chart(sweep: pd.DataFrame) -> str:
+    """Value per push against how often we push, one line per strategy."""
+    if sweep.empty:
+        return ""
+    width, height = 900, 300
+    pad_l, pad_r, pad_b, pad_t = 52, 130, 52, 26
+    clean = sweep.dropna(subset=["per_week", "currency_uplift_bps"])
+    x_lo, x_hi = 0.0, float(clean["per_week"].max()) * 1.08
+    y_lo, y_hi = 0.0, float(clean["currency_uplift_bps"].max()) * 1.12
+    def px(value: float) -> float:
+        return _scale(value, x_lo, x_hi, pad_l, width - pad_r)
+
+    def py(value: float) -> float:
+        return _scale(value, y_lo, y_hi, height - pad_b, pad_t)
+
+    parts = [
+        f'<text x="0" y="{pad_t - 8}" class="cap">выгода на пуш, б.п.</text>',
+        f'<line x1="{pad_l}" y1="{height - pad_b}" x2="{width - pad_r}" '
+        f'y2="{height - pad_b}" class="axis" />',
+        # The brief's mandatory band, drawn as the constraint it is.
+        f'<rect x="{px(1.0):.1f}" y="{pad_t}" width="{px(2.0) - px(1.0):.1f}" '
+        f'height="{height - pad_b - pad_t:.1f}" class="band" />'
+        f'<text x="{(px(1.0) + px(2.0)) / 2:.1f}" y="{pad_t + 12}" class="tick mid">'
+        f"полоса ТЗ</text>",
+    ]
+    tones = {"oracle": "ceiling", "percentile": "gain", "utility_risk": "amber"}
+    for name, group in clean.groupby("strategy", sort=False):
+        ordered = group.sort_values("per_week")
+        tone = tones.get(name, "flat")
+        points = " ".join(
+            f"{px(float(r.per_week)):.1f},{py(float(r.currency_uplift_bps)):.1f}"
+            for r in ordered.itertuples()
+        )
+        parts.append(f'<polyline points="{points}" class="line line-{tone}" />')
+        for r in ordered.itertuples():
+            parts.append(
+                f'<circle cx="{px(float(r.per_week)):.1f}" '
+                f'cy="{py(float(r.currency_uplift_bps)):.1f}" r="4" class="dot-{tone}">'
+                f"<title>{_esc(name)} · {_esc(r.cadence)}: "
+                f"{_num(r.currency_uplift_bps)} б.п. при {_num(r.per_week, 2)}/нед"
+                f"</title></circle>"
+            )
+        last = ordered.iloc[-1]
+        parts.append(
+            f'<text x="{px(float(last.per_week)) + 9:.1f}" '
+            f'y="{py(float(last.currency_uplift_bps)) + 4:.1f}" class="val">'
+            f"{_esc(name)}</text>"
+        )
+    for value in (0.2, 0.5, 1.0, 1.5, 2.0):
+        parts.append(
+            f'<text x="{px(value):.1f}" y="{height - pad_b + 18}" class="tick mid">'
+            f"{value:g}</text>"
+        )
+    parts.append(
+        f'<text x="{(pad_l + width - pad_r) / 2:.1f}" y="{height - 12}" class="tick mid">'
+        f"пушей на коридор в неделю</text>"
+        f'<text x="0" y="{pad_t + 4}" class="tick">{_num(y_hi, 0)}</text>'
+        f'<text x="0" y="{height - pad_b}" class="tick">0</text>'
+    )
+    return _svg(width, height, "".join(parts), "Выгода на пуш против частоты")
+
+
 def _rate_chart(
     panel: pd.DataFrame, signals: pd.DataFrame, iso: str, start: pd.Timestamp
 ) -> str:
@@ -536,9 +598,9 @@ def _kpis(board: pd.DataFrame, audit: pd.DataFrame) -> str:
         if "oracle" in indexed.index and ceiling:
             policed = float(indexed.loc["oracle", "currency_uplift_bps"])
             tiles.append((
-                "Съедает политика отправки",
+                "Цена решения вслепую",
                 _num((1 - policed / ceiling) * 100, 0) + "%",
-                "выгоды теряется",
+                "выгоды теряется онлайн",
                 f"идеальный счёт даёт {_num(policed)} б.п. вместо {_num(ceiling)}",
                 "loss",
             ))
@@ -670,6 +732,9 @@ td.bar{width:160px; padding:9px 6px}
 .line{fill:none; stroke-width:1.8; stroke-linejoin:round}
 .line-gain{stroke:var(--gain)} .line-ceiling{stroke:var(--ceiling)}
 .line-rate{stroke:var(--ink); stroke-width:1.2; opacity:.55}
+.line-amber{stroke:var(--amber)} .dot-amber{fill:var(--amber)}
+.dot-flat{fill:var(--faint)} .line-flat{stroke:var(--faint)}
+.band{fill:var(--ceiling); opacity:.07}
 .trend{stroke-width:1.5; stroke-dasharray:5 4}
 .trend-gain{stroke:var(--gain)} .trend-loss{stroke:var(--loss)}
 .dot{fill:var(--faint)} .dot-key{fill:var(--amber)}
@@ -737,6 +802,7 @@ def render_dashboard(
     per_fold = frames["per_fold"]
     signals = frames["signals"]
     audit = frames.get("audit", pd.DataFrame())
+    cadence = frames.get("cadence_sweep", pd.DataFrame())
     indexed = board.set_index("strategy")
 
     def value_of(strategy: str, column: str = "currency_uplift_bps") -> float | None:
@@ -782,9 +848,6 @@ def render_dashboard(
     pct_uplift = value_of("percentile")
     conflict_lo = value_of("oracle_topk", "hit_favourable")
     conflict_lift = value_of("oracle_topk", "hit_lift_favourable")
-    policy_loss = (
-        (1 - pairs[0][2] / pairs[0][1]) * 100 if pairs and pairs[0][1] else float("nan")
-    )
 
     return f"""<title>Сигнальный слой: разбор</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -798,15 +861,15 @@ def render_dashboard(
   <h1>Индикатор не был узким местом</h1>
   <p class="lede">Все стратегии живут на одинаковом бюджете пушей, оцениваются
     только out-of-time и сравниваются со случайным расписанием, а не с нулём.
-    В такой рамке видно, что бо́льшую часть выгоды теряет не модель, а правило
-    отправки — и что одно из двух правил правдивости из ТЗ вредно
+    В такой рамке видно, что бо́льшую часть выгоды забирает бюджет пушей, а не
+    качество индикатора — и что одно из двух правил правдивости из ТЗ вредно
     оптимизировать.</p>
   <div class="meta">
     <span>коридоры: {_esc(", ".join(spec.corridors))}</span>
     <span>{eval_start:%Y-%m-%d} — {eval_end:%Y-%m-%d}</span>
     <span>{folds} окон по {spec.fold_months} мес</span>
     <span>h = {spec.horizon} дней</span>
-    <span>≤ {spec.max_signals_per_week} пуша/нед</span>
+    <span>бюджет: {_esc(spec.cadence.label)}</span>
     <span>{spec.random_trials} случайных расписаний</span>
   </div>
 </header>
@@ -826,28 +889,46 @@ def render_dashboard(
 
 <section>
   <div class="claim">
-    <h2>1 · Жадная политика отправки съедает три четверти выгоды</h2>
-    <p>Одна и та же оценка дня, но два способа превратить её в пуш. Свободный
-      выбор лучших дней недели — против онлайн-правила «отправляй первый день
-      выше скользящего квантиля», которое работает сейчас. Даже идеальное знание
-      будущего проходит через эту воронку и теряет
-      {_num(policy_loss, 0)}% выгоды.
-      Улучшение политики стоит дороже любого улучшения модели. Строки сравнимы
-      напрямую: обе стороны отличаются только способом превратить счёт в пуш,
-      поэтому MVP взят в варианте без порога молчания.</p>
+    <h2>1 · Выгоду теряет не индикатор, а бюджет пушей</h2>
+    <p>Здесь два разных механизма, и их легко перепутать. Первый — <b>кулдаун
+      молча съедает бюджет</b>: при лимите 2 в неделю пауза в 3 наблюдения
+      значит, что выстрел в понедельник блокирует вторник, среду и четверг, и
+      второй слот достижим только в пятницу. Политика продолжает темповать так,
+      будто слота два, и тратит первый на посредственный день. Смена кулдауна с
+      3 на 1 при том же лимите подняла идеальный счёт с 19.6 до 51.3 б.п., а
+      правило процентиля — с 13.0 до 19.9.</p>
+    <p>Второй — <b>сама частота задаёт планку</b>: чем реже пуш, тем выше должен
+      быть день, на который его тратят. Серая полоса — обязательный коридор ТЗ
+      1–2 в неделю. Точки левее его нарушают ТЗ намеренно: свип нужен, чтобы
+      назначить полосе цену, а не чтобы тихо её расширить.</p>
+  </div>
+  <div class="panel">
+    {_cadence_chart(cadence)}
+  </div>
+</section>
+
+<section>
+  <div class="claim">
+    <h2>2 · Сколько стоит решать онлайн</h2>
+    <p>Тот же счёт, но выбор лучших дней окна задним числом. Разрыв — цена того,
+      что вживую решать надо сегодня, не зная остатка недели. Чего он <b>не</b>
+      значит: пороговое правило политики почти оптимально. Точная задача об
+      оптимальной остановке для 2 слотов на 5 дней даёт резервные квантили
+      0.579 / 0.500 / 0.375, эвристика <code>1 − k/n</code> — 0.600 / 0.500 /
+      0.333. Менять её не на что; чинить надо кулдаун и частоту.</p>
   </div>
   <div class="panel">
     {_policy_cost_chart(pairs)}
     <div class="key">
-      <span><i style="background:var(--ceiling)"></i>свободный выбор дней недели</span>
-      <span><i style="background:var(--gain)"></i>через текущую жадную политику</span>
+      <span><i style="background:var(--ceiling)"></i>выбор лучших дней окна задним числом</span>
+      <span><i style="background:var(--gain)"></i>онлайн, через политику</span>
     </div>
   </div>
 </section>
 
 <section>
   <div class="claim">
-    <h2>2 · Два правила правдивости смотрят в разные стороны</h2>
+    <h2>3 · Два правила правдивости смотрят в разные стороны</h2>
     <p>«Сейчас выгодно» засчитывается, когда курс h дней не поднимается выше —
       то есть когда он продолжает падать и клиенту следовало подождать.
       Дни, которые на самом деле были лучшими для клиента, проходят это правило
@@ -868,7 +949,7 @@ def render_dashboard(
 
 <section>
   <div class="claim">
-    <h2>3 · Выигрыш MVP держится на двух коридорах и на 2022 годе</h2>
+    <h2>4 · Выигрыш MVP держится на двух коридорах и на 2022 годе</h2>
     <p>Общая цифра {_num(mvp_uplift)} б.п. выглядит лучше правила процентиля
       ({_num(pct_uplift)} б.п.), но распадается при разрезе. Из пяти коридоров
       в плюсе только два, и оба выигрыша приходятся на всплеск волатильности
@@ -985,13 +1066,13 @@ def build_dashboard(
     directory = Path(report_dir)
     names = (
         "leaderboard", "per_corridor", "per_fold", "gates",
-        "horizons", "lambda_sweep", "audit", "signals",
+        "horizons", "lambda_sweep", "cadence_sweep", "audit", "signals",
     )
     frames: dict[str, pd.DataFrame] = {}
     for name in names:
         path = directory / f"{name}.csv"
         if not path.is_file():
-            if name == "audit":
+            if name in ("audit", "cadence_sweep"):
                 frames[name] = pd.DataFrame()
                 continue
             raise FileNotFoundError(f"Missing {path}; run the benchmark first")

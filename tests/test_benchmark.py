@@ -264,3 +264,49 @@ def test_build_dashboard_writes_a_file(small_run, tmp_path):
     )
     assert target.is_file()
     assert target.stat().st_size > 5_000
+
+
+# --- cadence sweep -----------------------------------------------------------
+
+
+def test_cadence_sweep_prices_every_budget_in_the_grid(small_run):
+    sweep = small_run.cadence_sweep
+    assert len(sweep)
+    assert set(sweep["cadence"]) == {c.label for c in BenchmarkSpec().cadence_grid}
+    # Rarer pushes must clear a higher bar, so value per push rises as the rate
+    # falls. Checked on the oracle, where the ordering is not obscured by noise.
+    oracle = sweep[sweep["strategy"].eq("oracle")].dropna(subset=["currency_uplift_bps"])
+    if len(oracle) > 2:
+        ordered = oracle.sort_values("per_week")
+        assert ordered["currency_uplift_bps"].iloc[0] > ordered["currency_uplift_bps"].iloc[-1]
+
+
+def test_cadence_metrics_are_computed_per_corridor_not_pooled():
+    """Gaps between signals of different corridors are not gaps a client sees."""
+    from signal_layer.benchmark.runner import _cadence, _cadence_by_corridor
+
+    dates = pd.to_datetime(["2022-01-03", "2022-01-10", "2022-01-17", "2022-01-24"])
+    # Two corridors, each perfectly regular, but interleaved one day apart.
+    signals = pd.DataFrame(
+        {
+            "iso": ["TJS"] * 4 + ["KGS"] * 4,
+            "quote_date": list(dates) + list(dates + pd.Timedelta(days=1)),
+        }
+    )
+    per_corridor = _cadence_by_corridor(signals)
+    pooled = _cadence(signals)
+
+    # Each corridor is a metronome: zero variation in its own gaps.
+    assert per_corridor["interval_cv"] == pytest.approx(0.0, abs=1e-9)
+    # Pooling interleaves them into an alternating 1/6-day pattern and reports
+    # burstiness no client experiences.
+    assert pooled["interval_cv"] > 0.5
+    assert pooled["interval_cv"] > per_corridor["interval_cv"]
+
+
+def test_headline_cadence_stays_inside_the_briefs_band():
+    """The default budget must satisfy the gate the brief mandates."""
+    spec = BenchmarkSpec()
+    gate = next(g for g in spec.gates if g.name == "G4_frequency")
+    assert gate.bound == (1.0, 2.0), "the brief mandates 1-2 signals per week"
+    assert spec.cadence.per_week <= 2.0

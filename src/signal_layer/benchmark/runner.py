@@ -34,7 +34,7 @@ from ..features import compute_features
 from ..labels import build_labels, hit_column
 from ..utility_risk import UtilityRiskConfig, scores_asof, walk_forward_scores
 from . import stats
-from .spec import BenchmarkSpec
+from .spec import BenchmarkSpec, Cadence
 from .strategies import (
     DEFAULT_STRATEGY_NAMES,
     ModelScoreCache,
@@ -73,6 +73,7 @@ class BenchmarkResult:
     gates: pd.DataFrame
     horizon_table: pd.DataFrame
     lambda_sweep: pd.DataFrame
+    cadence_sweep: pd.DataFrame
     audit: pd.DataFrame
     coefficients: pd.DataFrame
 
@@ -80,18 +81,26 @@ class BenchmarkResult:
 # --- helpers -----------------------------------------------------------------
 
 
-def _policy_for(strategy: Strategy, spec: BenchmarkSpec) -> PolicyConfig:
+def _policy_for(
+    strategy: Strategy, spec: BenchmarkSpec, cadence: Cadence | None = None
+) -> PolicyConfig:
+    point = cadence or spec.cadence
     return PolicyConfig(
-        window="week",
-        max_signals_per_window=spec.max_signals_per_week,
-        cooldown_observations=spec.cooldown_observations,
+        window=point.window,
+        max_signals_per_window=point.max_per_window,
+        cooldown_observations=point.cooldown,
         threshold_lookback=spec.threshold_lookback,
         minimum_threshold_history=spec.minimum_threshold_history,
         minimum_score=strategy.minimum_score,
     )
 
 
-def _emit_signals(strategy: Strategy, spec: BenchmarkSpec, scores: pd.DataFrame) -> pd.DataFrame:
+def _emit_signals(
+    strategy: Strategy,
+    spec: BenchmarkSpec,
+    scores: pd.DataFrame,
+    cadence: Cadence | None = None,
+) -> pd.DataFrame:
     """Run the shared communication policy and keep the days it selected.
 
     A ``weekly_best`` strategy bypasses the policy and takes the highest scoring
@@ -103,15 +112,17 @@ def _emit_signals(strategy: Strategy, spec: BenchmarkSpec, scores: pd.DataFrame)
         return pd.DataFrame(columns=["iso", "quote_date", "score", "threshold"])
     if strategy.selection == "weekly_best":
         ranked = scores.copy()
-        ranked["week"] = ranked["quote_date"].dt.to_period("W-SUN")
+        point = cadence or spec.cadence
+        period = "W-SUN" if point.window == "week" else "M"
+        ranked["window_id"] = ranked["quote_date"].dt.to_period(period)
         best = (
             ranked.sort_values("score", ascending=False)
-            .groupby(["iso", "week"], sort=False)
-            .head(spec.max_signals_per_week)
+            .groupby(["iso", "window_id"], sort=False)
+            .head(point.max_per_window)
         )
         best = best.assign(threshold=float("nan"))
         return best[["iso", "quote_date", "score", "threshold"]].reset_index(drop=True)
-    decisions = apply_policy(scores, _policy_for(strategy, spec))
+    decisions = apply_policy(scores, _policy_for(strategy, spec, cadence))
     selected = decisions.loc[decisions["decision"], ["iso", "quote_date", "score", "threshold"]]
     return selected.reset_index(drop=True)
 
@@ -135,6 +146,31 @@ def _cadence(signals: pd.DataFrame) -> dict[str, float]:
         "max_gap_days": float(values.max()),
         "series_share": float((values <= 5).mean()),
     }
+
+
+def _cadence_by_corridor(signals: pd.DataFrame) -> dict[str, float]:
+    """Cadence metrics computed per corridor, then weighted by signal count.
+
+    Gaps are only meaningful inside one corridor: a client on the TJS corridor
+    never sees the KGS pushes, so pooling all five before differencing would
+    interleave unrelated streams and report a burstiness nobody experiences.
+    """
+    per_iso, weights = [], []
+    for _, group in signals.groupby("iso", sort=False):
+        stats_for_iso = _cadence(group)
+        if np.isfinite(stats_for_iso["interval_cv"]):
+            per_iso.append(stats_for_iso)
+            weights.append(float(len(group)))
+    if not per_iso:
+        return {"interval_cv": float("nan"), "max_gap_days": float("nan"),
+                "series_share": float("nan")}
+    weight_array = np.asarray(weights)
+    out = {
+        key: _weighted(np.asarray([entry[key] for entry in per_iso]), weight_array)
+        for key in ("interval_cv", "series_share")
+    }
+    out["max_gap_days"] = float(max(entry["max_gap_days"] for entry in per_iso))
+    return out
 
 
 def _fold_statistics(
@@ -409,6 +445,17 @@ def run_benchmark(
     lambda_sweep = _lambda_sweep(
         panel, features, labels, complete, (eval_start, eval_end), cache, resolved, lambda_grid
     )
+    sweep_strategies = tuple(
+        name for name in ("oracle", "percentile", "utility_risk") if name in strategy_names
+    )
+    cadence_sweep = (
+        _cadence_sweep(
+            panel, features, labels, complete, (eval_start, eval_end),
+            cache, resolved, sweep_strategies,
+        )
+        if sweep_strategies
+        else pd.DataFrame()
+    )
     audit = _audit_no_lookahead(panel, resolved, config) if run_audit else pd.DataFrame()
     return BenchmarkResult(
         signals=signals,
@@ -418,6 +465,7 @@ def run_benchmark(
         gates=gates,
         horizon_table=horizon_table,
         lambda_sweep=lambda_sweep,
+        cadence_sweep=cadence_sweep,
         audit=audit,
         coefficients=cache.coefficients,
     )
@@ -588,6 +636,62 @@ def _horizon_table(
             joined = joined[joined["outcome_complete"]]
             entry[f"hit_h{h}"] = float(joined[column].mean()) if len(joined) else float("nan")
         rows.append(entry)
+    return pd.DataFrame(rows)
+
+
+def _cadence_sweep(
+    panel: pd.DataFrame,
+    features: pd.DataFrame,
+    labels: pd.DataFrame,
+    complete: pd.DataFrame,
+    window: tuple[pd.Timestamp, pd.Timestamp],
+    cache: ModelScoreCache,
+    spec: BenchmarkSpec,
+    strategy_names: tuple[str, ...],
+) -> pd.DataFrame:
+    """What the communication policy costs, priced in client money.
+
+    The same scores are pushed through a range of budgets. Two effects separate
+    here and they are usually confused with each other: the *cooldown* silently
+    shrinks a weekly budget the policy still paces against, and the *frequency
+    itself* determines how far up the value distribution a push has to reach.
+    Neither is a defect of any indicator, which is why the sweep lives beside
+    the leaderboard rather than inside it.
+    """
+    eval_start, eval_end = window
+    universe = complete[complete["quote_date"].between(eval_start, eval_end)]
+    n_corridors = max(1, len(spec.corridors))
+    days_per_corridor = len(universe) / n_corridors
+    rows: list[dict[str, object]] = []
+    for cadence in spec.cadence_grid:
+        for name in strategy_names:
+            strategy = get_strategy(name)
+            scores = build_scores(strategy, spec, panel, features, labels, cache)
+            emitted = _emit_signals(strategy, spec, scores, cadence)
+            sent = emitted.merge(complete, on=["iso", "quote_date"], how="inner")
+            sent = sent[sent["quote_date"].between(eval_start, eval_end)]
+            row: dict[str, object] = {
+                "cadence": cadence.label,
+                "window": cadence.window,
+                "max_per_window": cadence.max_per_window,
+                "cooldown": cadence.cooldown,
+                "strategy": name,
+                "n_signals": len(sent),
+            }
+            if sent.empty:
+                row["per_week"] = 0.0
+                rows.append(row)
+                continue
+            row.update(
+                {
+                    "per_week": (len(sent) / n_corridors) / (days_per_corridor / 5.0),
+                    "currency_uplift_bps": float(np.nanmean(sent["currency_gain_bps"])),
+                    "hit_closing": float(sent["held_window_closing"].mean()),
+                    "bad_push_rate": float(sent["bad_push"].mean()),
+                    **_cadence_by_corridor(sent),
+                }
+            )
+            rows.append(row)
     return pd.DataFrame(rows)
 
 

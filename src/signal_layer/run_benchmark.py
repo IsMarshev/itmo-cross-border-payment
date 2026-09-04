@@ -85,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         ("gates", result.gates),
         ("horizons", result.horizon_table),
         ("lambda_sweep", result.lambda_sweep),
+        ("cadence_sweep", result.cadence_sweep),
         ("audit", result.audit),
         ("signals", result.signals),
         ("coefficients", result.coefficients),
