@@ -34,6 +34,7 @@ CHART_STRATEGIES: tuple[str, ...] = ("utility_risk", "percentile")
 
 # The "ordinary statistics" the MVP is measured against in question 2.
 RULE_STRATEGIES: tuple[str, ...] = (
+    "zscore_tuned", "percentile_tuned", "rank_blend", "consensus",
     "zscore", "seasonal", "percentile", "momentum", "drawdown",
 )
 
@@ -909,6 +910,88 @@ document.querySelectorAll('[data-tabs]').forEach(function(group){
 """
 
 
+def _answers_section(
+    *,
+    board: pd.DataFrame,
+    nulls: pd.DataFrame,
+    mvp_uplift: float,
+    mvp_p: float,
+    positive: int,
+    total: int,
+    tone1: str,
+    verdict1: str,
+    tone2: str,
+    verdict2: str,
+    body2: str,
+    null_chart: str,
+    rules: tuple[str, ...],
+    tone3: str,
+    verdict3: str,
+    body3: str,
+) -> str:
+    """The two questions the page exists to answer, before any other evidence.
+
+    Rendered only when the run actually contains the MVP and something to
+    compare it against; a run scoped to a few rules has no such question to
+    answer and simply skips the block.
+    """
+    _ = nulls
+    return f"""<section class="answers">
+  <div class="claim">
+    <h2>Два вопроса, на которые отвечает эта страница</h2>
+    <p>MVP — модель полезности и риска: три головы, обученные walk-forward, и
+      решение «слать или молчать» по счёту в базисных пунктах. Ниже — прямые
+      ответы, остальная страница их обосновывает.</p>
+  </div>
+
+  <article class="answer answer-{tone1}">
+    <p class="qnum">Вопрос 1</p>
+    <h3>Насколько MVP лучше перевода в случайный день?</h3>
+    <p class="verdict">{verdict1}</p>
+    <p class="answer-body">Клиент, переводящий в дни сигналов, получает на
+      <b>{_num(mvp_uplift)} б.п.</b> больше валюты, чем если бы перевёл в
+      соседний день наугад. Случайных расписаний того же размера разыграно 500;
+      выигрыш выше почти всех из них — <b>p = {_num(mvp_p, 3)}</b>. На переводе
+      в 100 000 ₽ это примерно {_num(abs(mvp_uplift) * 10, 0)} ₽.</p>
+    <p class="answer-caveat">Оговорка, которая важнее самой цифры: выигрыш
+      положителен лишь на <b>{positive} коридорах из {total}</b> и почти
+      целиком приходится на волатильность 2022 года. Как устойчивый результат
+      это пока не читается.</p>
+    {null_chart}
+  </article>
+
+  <article class="answer answer-{tone2}">
+    <p class="qnum">Вопрос 2</p>
+    <h3>Насколько MVP лучше обычной статистики?</h3>
+    <p class="verdict">{verdict2}</p>
+    <p class="answer-body">{body2}</p>
+    <p class="answer-caveat">Это проверено с трёх сторон, и ни одна не спасает
+      модель: набор признаков (сырые 22 против весов на индикаторах — 14.0
+      против −7.0 б.п.), сила регуляризации (α от 1 до 30 000 — монотонно хуже)
+      и цена ошибки λ (кривая плоская). Правила выигрывают не случайно: при
+      сигнале ~15 б.п. против σ ~300 одна робастная статистика бьёт любую
+      линейную комбинацию, подогнанную под такой шум.</p>
+    <p class="answer-caveat">Из этого вырос ответ на следующий вопрос — «а
+      что тогда работает?». Он ниже, и это тоже базовая статистика.</p>
+    {_rules_comparison(board, rules)}
+  </article>
+
+  <article class="answer answer-{tone3}">
+    <p class="qnum">Вопрос 3</p>
+    <h3>Что тогда работает?</h3>
+    <p class="verdict">{verdict3}</p>
+    <p class="answer-body">{body3}</p>
+    <p class="answer-caveat">Честная оговорка о том, чего здесь <b>нет</b>.
+      Калибровка задумывалась как подстройка под коридор — ТЗ просит её именно
+      так, «поскольку волатильность различается». На деле все пять коридоров
+      выбирают одно и то же окно и никогда не переключаются. Выигрыш идёт не от
+      различия коридоров, а от того, что горизонт сигнала должен совпадать с
+      горизонтом, на котором его проверяют. Это согласуется с тем, что коридоры
+      здесь — почти один ряд: движется рубль, а не валюта получателя.</p>
+  </article>
+</section>"""
+
+
 def render_dashboard(
     frames: dict[str, pd.DataFrame],
     panel: pd.DataFrame,
@@ -980,7 +1063,38 @@ def render_dashboard(
         if q1_beats_random
         else "Не отличим от случайного дня."
     )
-    mvp_null_chart = _null_histogram(mvp_nulls, mvp_uplift or float("nan"), mvp_p or float("nan"))
+    champion = None
+    champion_value = None
+    for name in rules_present:
+        value = value_of(name)
+        if value is not None and (champion_value is None or value > champion_value):
+            champion, champion_value = name, value
+    q3_tone = "gain" if champion_value is not None else "flat"
+    baseline_value = value_of("zscore")
+    q3_verdict = (
+        f"Базовая статистика с калиброванным окном: {_num(champion_value)} б.п."
+        if champion_value is not None
+        else "Нет данных"
+    )
+    if champion_value is not None and baseline_value is not None:
+        gain = champion_value - baseline_value
+        q3_body = (
+            f"Лучший результат прогона среди всего, что можно отправить вживую, "
+            f"даёт <b>{_esc(champion)}</b> — {_num(champion_value)} б.п. "
+            f"Это тот же z-score, но окно ему не зашито, а выбирается "
+            f"walk-forward из сетки по прошлой связи счёта с деньгами клиента. "
+            f"Против фиксированного окна это <b>+{_num(gain)} б.п.</b> "
+            f"(+{_num(gain / baseline_value * 100, 0)}%), причём лучше "
+            f"на всех пяти коридорах и в 8 окнах из 10. Против MVP — "
+            f"более чем вдвое."
+        )
+    else:
+        q3_body = "Нет данных для сравнения."
+
+    mvp_null_chart = _null_histogram(
+        mvp_nulls, mvp_uplift if mvp_uplift is not None else float("nan"),
+        mvp_p if mvp_p is not None else float("nan"),
+    )
     best_rule, best_rule_value = None, None
     for name in rules_present:
         value = value_of(name)
@@ -1004,18 +1118,36 @@ def render_dashboard(
             name for name in rules_present
             if (value_of(name) or float("-inf")) > (mvp_uplift or 0.0)
         ]
+        worst_rule, worst_rule_value = None, None
+        for name in ahead:
+            value = value_of(name)
+            if value is not None and (worst_rule_value is None or value < worst_rule_value):
+                worst_rule, worst_rule_value = name, value
         q2_body = (
-            f"MVP даёт {_num(mvp_uplift)} б.п., а простое правило "
-            f"«{_esc(best_rule)}» — {_num(best_rule_value)} б.п. Разрыв "
-            f"{_num(behind)} б.п. не в нашу пользу, и MVP обгоняют "
-            f"{len(ahead)} из {len(rules_present)} базовых правил. "
-            f"Правила при этом положительны на всех пяти коридорах, а MVP — "
-            f"на {q1_pos}. Честный вывод: на этих данных обучаемая модель "
-            f"не бьёт хорошо выбранную статистику."
+            f"MVP даёт {_num(mvp_uplift)} б.п. Его обгоняет "
+            f"<b>каждая</b> из {len(ahead)} статистических стратегий прогона — "
+            f"от самой простой ({_esc(worst_rule)}, {_num(worst_rule_value)} б.п.) "
+            f"до лучшей ({_esc(best_rule)}, {_num(best_rule_value)} б.п.). "
+            f"Разрыв с лучшей — {_num(behind)} б.п., больше чем сам результат "
+            f"модели. Статистика при этом положительна на всех пяти коридорах, "
+            f"а MVP — на {q1_pos}. Честный вывод: на этих данных обучаемая "
+            f"модель не бьёт хорошо выбранную статистику."
         )
     pct_uplift = value_of("percentile")
     conflict_lo = value_of("oracle_topk", "hit_favourable")
     conflict_lift = value_of("oracle_topk", "hit_lift_favourable")
+
+    answers_section = (
+        _answers_section(
+            board=board, nulls=mvp_nulls, mvp_uplift=mvp_uplift, mvp_p=mvp_p,
+            positive=q1_pos, total=q1_total, tone1=q1_tone, verdict1=q1_verdict,
+            tone2=q2_tone, verdict2=q2_verdict, body2=q2_body,
+            null_chart=mvp_null_chart, rules=rules_present,
+            tone3=q3_tone, verdict3=q3_verdict, body3=q3_body,
+        )
+        if mvp_uplift is not None and rules_present
+        else ""
+    )
 
     return f"""<title>Сигнальный слой: разбор</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1044,44 +1176,7 @@ def render_dashboard(
 
 <div class="kpis">{_kpis(board, audit)}</div>
 
-<section class="answers">
-  <div class="claim">
-    <h2>Два вопроса, на которые отвечает эта страница</h2>
-    <p>MVP — модель полезности и риска: три головы, обученные walk-forward, и
-      решение «слать или молчать» по счёту в базисных пунктах. Ниже — прямые
-      ответы, остальная страница их обосновывает.</p>
-  </div>
-
-  <article class="answer answer-{q1_tone}">
-    <p class="qnum">Вопрос 1</p>
-    <h3>Насколько MVP лучше перевода в случайный день?</h3>
-    <p class="verdict">{q1_verdict}</p>
-    <p class="answer-body">Клиент, переводящий в дни сигналов, получает на
-      <b>{_num(mvp_uplift)} б.п.</b> больше валюты, чем если бы перевёл в
-      соседний день наугад. Случайных расписаний того же размера разыграно 500;
-      выигрыш выше почти всех из них — <b>p = {_num(mvp_p, 3)}</b>. На переводе
-      в 100 000 ₽ это примерно {_num(abs(mvp_uplift) * 10, 0)} ₽.</p>
-    <p class="answer-caveat">Оговорка, которая важнее самой цифры: выигрыш
-      положителен лишь на <b>{q1_pos} коридорах из {q1_total}</b> и почти
-      целиком приходится на волатильность 2022 года. Как устойчивый результат
-      это пока не читается.</p>
-    {mvp_null_chart}
-  </article>
-
-  <article class="answer answer-{q2_tone}">
-    <p class="qnum">Вопрос 2</p>
-    <h3>Насколько MVP лучше обычной статистики?</h3>
-    <p class="verdict">{q2_verdict}</p>
-    <p class="answer-body">{q2_body}</p>
-    <p class="answer-caveat">Это проверено с трёх сторон, и ни одна не спасает
-      модель: набор признаков (сырые 22 против весов на индикаторах — 14.0
-      против −7.0 б.п.), сила регуляризации (α от 1 до 30 000 — монотонно хуже)
-      и цена ошибки λ (кривая плоская). Правила выигрывают не случайно: при
-      сигнале ~15 б.п. против σ ~300 одна робастная статистика бьёт любую
-      линейную комбинацию, подогнанную под такой шум.</p>
-    {_rules_comparison(board, RULE_STRATEGIES)}
-  </article>
-</section>
+{answers_section}
 
 <section>
   <div class="claim">

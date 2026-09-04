@@ -79,6 +79,57 @@ def rule_matrix(features: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(columns, index=features.index)
 
 
+# How much trailing history a rolling rank looks at before it is trusted.
+RANK_WINDOW = 250
+RANK_MIN_PERIODS = 60
+
+# A rule counts as "firing" when its trailing rank clears this.
+CONSENSUS_QUANTILE = 0.70
+
+
+def trailing_ranks(features: pd.DataFrame) -> pd.DataFrame:
+    """Each rule's score as its own trailing percentile, per corridor.
+
+    Rules are measured in incompatible units — a percentile, a sigma, a day
+    count — so they cannot be averaged as they are. Converting each to its own
+    trailing rank puts them on one scale without fitting anything, which is the
+    whole point: a linear blend fitted to this target was tried and lost badly
+    (see ``utility_risk``), because it destroys the robust ranking each rule has
+    on its own. A rank is a monotone transform, so it preserves it.
+
+    The window is trailing and per corridor, so a rank on date T uses only that
+    corridor's own past.
+    """
+    ranked: dict[str, pd.Series] = {}
+    ordered = features.sort_values(["iso", "quote_date"])
+    for name in RULE_NAMES:
+        score = rule_score(name, ordered).astype(float)
+        ranked[name] = score.groupby(ordered["iso"], sort=False).transform(
+            lambda s: s.rolling(RANK_WINDOW, min_periods=RANK_MIN_PERIODS).rank(pct=True)
+        )
+    return pd.DataFrame(ranked, index=ordered.index).reindex(features.index)
+
+
+def blend_scores(features: pd.DataFrame) -> pd.DataFrame:
+    """Two fitting-free ways to combine the rules into one score.
+
+    ``rank_blend``  the mean trailing rank across rules. Every rule gets an
+                    equal vote; no weight is estimated from a noisy target, so
+                    there is nothing to overfit.
+    ``consensus``   how many rules are simultaneously in their favourable tail.
+                    Deliberately coarse — it asks for agreement rather than
+                    magnitude. The mean rank breaks ties inside a count.
+    """
+    ranks = trailing_ranks(features)
+    mean_rank = ranks.mean(axis=1, skipna=True)
+    firing = (ranks > CONSENSUS_QUANTILE).sum(axis=1).astype(float)
+    # Tie-break inside a count without ever reordering across counts.
+    return pd.DataFrame(
+        {"rank_blend": mean_rank, "consensus": firing + mean_rank},
+        index=features.index,
+    )
+
+
 RULE_FEATURE_COLUMNS: tuple[str, ...] = (
     "rule_percentile",
     "rule_zscore",

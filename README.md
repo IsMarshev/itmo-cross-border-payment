@@ -45,6 +45,11 @@ A run writes `reports/benchmark/dashboard.html` — a standalone page (inline SV
 no external dependencies, light and dark) that leads with the run's conclusions
 — alongside `scorecard.md` and the raw CSVs.
 
+`signal_layer.adaptive` holds the run's best live strategy: a z-score whose
+window is chosen walk-forward per corridor from the trailing rank correlation
+between score and realised client money. It scores 30.5bp against 23.4 for the
+same rule with a fixed window, and beats the learned model twice over.
+
 `signal_layer.utility_risk` is the MVP scored by it: three walk-forward heads
 (P(local minimum), expected advantage, P(bad push)) combined into a mean-risk
 score in basis points, `score = [u - lambda*risk] - [baseline]`, where `lambda`

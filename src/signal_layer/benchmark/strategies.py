@@ -51,12 +51,25 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from ..adaptive import (
+    TuningConfig,
+    percentile_candidates,
+    walk_forward_tuned,
+    zscore_candidates,
+)
 from ..rules import BLOCKED as _BLOCKED_SENTINEL
-from ..rules import rule_score
+from ..rules import blend_scores, rule_score
 from ..utility_risk import UtilityRiskConfig, rescore, walk_forward_scores
 from .spec import BenchmarkSpec
 
 SCORE_SCHEMA: tuple[str, ...] = ("quote_date", "available_on", "iso", "rub_per_unit", "score")
+
+# Candidate windows offered to the walk-forward calibration. The grid reaches
+# well below the 60-day span baked into `features.py` because the calibration
+# kept pinning its lower edge, and an optimum at a grid boundary is not an
+# optimum.
+ZSCORE_SPANS: tuple[int, ...] = (5, 10, 20, 40, 60, 120, 250)
+PERCENTILE_WINDOWS: tuple[int, ...] = (20, 30, 60, 90, 180, 250)
 
 _BLOCKED = _BLOCKED_SENTINEL
 
@@ -106,6 +119,29 @@ STRATEGIES: tuple[Strategy, ...] = (
         "reversal", "rule", "window_closing",
         "Курс был у 90-дневного минимума и пошёл вверх",
         minimum_score=-1e5,
+    ),
+    Strategy(
+        "zscore_tuned", "tuned", "favourable_now",
+        "z-score, окно которого коридор выбирает сам walk-forward",
+        rule="zscore",
+    ),
+    Strategy(
+        "percentile_tuned", "tuned", "favourable_now",
+        "Процентиль, окно которого коридор выбирает сам walk-forward",
+        rule="percentile",
+    ),
+    Strategy(
+        "rule_select", "tuned", "window_closing",
+        "Коридор сам выбирает индикатор walk-forward по прошлой связи с деньгами",
+        rule="rules",
+    ),
+    Strategy(
+        "rank_blend", "rule", "window_closing",
+        "Среднее скользящих рангов всех индикаторов — комбинация без подгонки",
+    ),
+    Strategy(
+        "consensus", "rule", "window_closing",
+        "Сколько индикаторов одновременно в своём выгодном хвосте",
     ),
     Strategy(
         "utility_only", "model", "window_closing",
@@ -159,9 +195,15 @@ def get_strategy(name: str) -> Strategy:
         raise KeyError(f"Unknown strategy {name!r}; known: {known}") from None
 
 
+# Fitting-free combinations of the rules; see ``signal_layer.rules``.
+_BLEND_NAMES = ("rank_blend", "consensus")
+
+
 def _rule_score(name: str, features: pd.DataFrame) -> pd.Series:
     """One rule's score. Definitions live in ``signal_layer.rules`` because the
     utility/risk model consumes the same expressions as its feature set."""
+    if name in _BLEND_NAMES:
+        return blend_scores(features)[name]
     return rule_score(name, features)
 
 
@@ -213,6 +255,28 @@ def build_scores(
         ].copy()
         rows["score"] = rows["currency_gain_bps"]
         return rows.dropna(subset=["score"])[list(SCORE_SCHEMA)].reset_index(drop=True)
+
+    if strategy.kind == "tuned":
+        tuning = TuningConfig(
+            horizon=spec.horizon, execution_offset=spec.execution_offset
+        )
+        parts = []
+        for iso in spec.corridors:
+            if strategy.rule == "zscore":
+                scored = walk_forward_tuned(
+                    panel, iso, zscore_candidates(ZSCORE_SPANS), tuning
+                )
+            elif strategy.rule == "percentile":
+                scored = walk_forward_tuned(
+                    panel, iso, percentile_candidates(PERCENTILE_WINDOWS), tuning
+                )
+            else:
+                scored = walk_forward_tuned(panel, iso, None, tuning, features=features)
+            if len(scored):
+                parts.append(scored[list(SCORE_SCHEMA)])
+        if not parts:
+            return pd.DataFrame(columns=list(SCORE_SCHEMA))
+        return pd.concat(parts, ignore_index=True)
 
     if strategy.kind == "model":
         parts = []
