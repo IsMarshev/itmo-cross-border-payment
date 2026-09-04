@@ -194,4 +194,4 @@ def walk_forward_predict(
         m = RidgeModel(alpha=alpha).fit(X_tr, y_tr)
         return m.predict
 
-    return _walk_forward(X, y, dates, iso, rates, min_train, fit_fn)
+    return _walk_forward(df, iso, min_train, fit_fn)

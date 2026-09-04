@@ -31,6 +31,25 @@ Its client-facing message contains only a trailing-rate fact. The optional
 Ridge strategy is trained only on targets whose full future horizon was already
 available by the requested as-of date.
 
+## CBSB-1 benchmark and the utility/risk model
+
+`BENCHMARK.md` defines how a signal layer is judged: every strategy — random,
+rule, model, oracle — gets the same push budget, is evaluated only out of time,
+and is tested against a matched random schedule rather than against zero.
+
+```bash
+uv run python -m signal_layer.run_benchmark --out reports/benchmark
+```
+
+A run writes `reports/benchmark/dashboard.html` — a standalone page (inline SVG,
+no external dependencies, light and dark) that leads with the run's conclusions
+— alongside `scorecard.md` and the raw CSVs.
+
+`signal_layer.utility_risk` is the MVP scored by it: three walk-forward heads
+(P(local minimum), expected advantage, P(bad push)) combined into a mean-risk
+score in basis points, `score = [u - lambda*risk] - [baseline]`, where `lambda`
+is the price of an asymmetric error. Read `BENCHMARK.md` before the numbers.
+
 ## Stage-4 backtest
 
 Run the canonical baseline backtest and write an exhaustive decision journal,
