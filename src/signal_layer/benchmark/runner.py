@@ -74,6 +74,7 @@ class BenchmarkResult:
     horizon_table: pd.DataFrame
     lambda_sweep: pd.DataFrame
     cadence_sweep: pd.DataFrame
+    null_distribution: pd.DataFrame
     audit: pd.DataFrame
     coefficients: pd.DataFrame
 
@@ -439,7 +440,9 @@ def run_benchmark(
     signals = pd.concat(signal_rows, ignore_index=True) if signal_rows else pd.DataFrame()
     per_fold = pd.DataFrame(fold_rows)
     per_corridor = _apply_fdr(pd.DataFrame(corridor_rows), resolved.fdr_alpha)
-    leaderboard = _build_leaderboard(per_corridor, signals, null_by_cell, resolved)
+    leaderboard, null_distribution = _build_leaderboard(
+        per_corridor, signals, null_by_cell, resolved
+    )
     gates = _evaluate_gates(leaderboard, resolved)
     horizon_table = _horizon_table(panel, signals, resolved)
     lambda_sweep = _lambda_sweep(
@@ -466,6 +469,7 @@ def run_benchmark(
         horizon_table=horizon_table,
         lambda_sweep=lambda_sweep,
         cadence_sweep=cadence_sweep,
+        null_distribution=null_distribution,
         audit=audit,
         coefficients=cache.coefficients,
     )
@@ -532,11 +536,18 @@ def _build_leaderboard(
     signals: pd.DataFrame,
     null_by_cell: dict[tuple[str, str], dict[str, np.ndarray]],
     spec: BenchmarkSpec,
-) -> pd.DataFrame:
-    """One row per strategy: pooled metrics, the null test, and the CBSB score."""
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """One row per strategy: pooled metrics, the null test, and the CBSB score.
+
+    Also returns the pooled null itself, one row per random schedule. Reporting
+    a p-value without the distribution it came from asks the reader to take the
+    test on faith; with the draws in hand they can see how far outside the cloud
+    of random schedules a strategy actually lands.
+    """
     if per_corridor.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
     rows: list[dict[str, object]] = []
+    null_rows: list[pd.DataFrame] = []
     for name, group in per_corridor.groupby("strategy", sort=False):
         weights = group["n_signals"].to_numpy(dtype=float)
         row: dict[str, object] = {
@@ -566,6 +577,16 @@ def _build_leaderboard(
             name, list(group["iso"]), weights, null_by_cell, spec.random_trials
         )
         row.update(_null_comparison(row, pooled))
+        null_rows.append(
+            pd.DataFrame(
+                {
+                    "strategy": name,
+                    "trial": np.arange(len(pooled["currency_uplift_bps"])),
+                    "currency_uplift_bps": pooled["currency_uplift_bps"],
+                    "hit_rate": pooled["hit_rate"],
+                }
+            )
+        )
         strategy_signals = (
             signals[signals["strategy"].eq(name)] if len(signals) else pd.DataFrame()
         )
@@ -587,7 +608,11 @@ def _build_leaderboard(
         if np.isfinite(span) and span > 0
         else np.nan
     )
-    return leaderboard.sort_values("cbsb_score", ascending=False).reset_index(drop=True)
+    nulls = pd.concat(null_rows, ignore_index=True) if null_rows else pd.DataFrame()
+    return (
+        leaderboard.sort_values("cbsb_score", ascending=False).reset_index(drop=True),
+        nulls,
+    )
 
 
 def _evaluate_gates(leaderboard: pd.DataFrame, spec: BenchmarkSpec) -> pd.DataFrame:

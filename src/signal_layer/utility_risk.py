@@ -68,6 +68,7 @@ import pandas as pd
 from .features import FEATURE_COLUMNS, compute_features
 from .labels import build_labels
 from .models import RidgeModel
+from .rules import RULE_FEATURE_COLUMNS, rule_matrix
 
 SCORE_COLUMNS: tuple[str, ...] = (
     "quote_date",
@@ -103,12 +104,39 @@ class UtilityRiskConfig:
     refit_every: int = 21
     ridge_alpha: float = 1.0
     logit_l2: float = 1.0
+    feature_set: str = "raw"
+    """Which design matrix the heads see.
+
+    ``raw``    the 22 backward-looking features from ``features.py``. The
+               default, on evidence rather than taste.
+    ``rules``  the indicator scores from ``signal_layer.rules``. Trying the
+               brief's own combination step — weight the indicators instead of
+               re-deriving them from raw features — looked like the obvious fix
+               for the low signal-to-noise ratio, and it *lost badly*: -7.0 bps
+               against +14.0 for ``raw``. The rules are strongly collinear with
+               each other, and a linear blend fitted to a noisy target destroys
+               the individually robust ranking each one has on its own. Kept
+               selectable so the result stays reproducible.
+    ``both``   the union: +12.2 bps, behind ``raw``. Seven extra collinear
+               columns buy nothing.
+    """
 
     def __post_init__(self) -> None:
         if self.lam < 0:
             raise ValueError("lam must be non-negative")
         if self.refit_every <= 0 or self.min_train <= 0:
             raise ValueError("refit_every and min_train must be positive")
+        if self.feature_set not in ("rules", "raw", "both"):
+            raise ValueError(f"Unknown feature_set {self.feature_set!r}")
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """The design-matrix columns implied by ``feature_set``."""
+        if self.feature_set == "rules":
+            return RULE_FEATURE_COLUMNS
+        if self.feature_set == "raw":
+            return FEATURE_COLUMNS
+        return (*RULE_FEATURE_COLUMNS, *FEATURE_COLUMNS)
 
 
 class LogisticIRLS:
@@ -204,6 +232,7 @@ def _training_prefix_lengths(
 def _prepare(panel: pd.DataFrame, iso: str, config: UtilityRiskConfig) -> pd.DataFrame:
     """Feature/label matrix for one corridor, warm-up rows dropped."""
     features = compute_features(panel)
+    features = pd.concat([features, rule_matrix(features)], axis=1)
     labels = build_labels(
         panel,
         horizon=config.horizon,
@@ -227,7 +256,7 @@ def _prepare(panel: pd.DataFrame, iso: str, config: UtilityRiskConfig) -> pd.Dat
         how="inner",
         validate="one_to_one",
     )
-    joined = joined.dropna(subset=list(FEATURE_COLUMNS))
+    joined = joined.dropna(subset=list(config.columns))
     return joined.sort_values("quote_date").reset_index(drop=True)
 
 
@@ -247,7 +276,8 @@ def walk_forward_scores(
     if data.empty:
         return pd.DataFrame(columns=SCORE_COLUMNS), pd.DataFrame()
 
-    X = data[list(FEATURE_COLUMNS)].to_numpy(dtype=float)
+    columns = list(resolved.columns)
+    X = data[columns].to_numpy(dtype=float)
     decision_time = data["available_on"].to_numpy(dtype="datetime64[ns]")
     label_time = data["label_available_on"].to_numpy(dtype="datetime64[ns]")
     y_utility = data["fwd_advantage_bps"].to_numpy(dtype=float)
@@ -304,13 +334,13 @@ def walk_forward_scores(
                     **{
                         f"u_{name}": float(coefficient)
                         for name, coefficient in zip(
-                            FEATURE_COLUMNS, utility_head.coef_, strict=True
+                            columns, utility_head.coef_, strict=True
                         )
                     },
                     **{
                         f"bad_{name}": float(coefficient)
                         for name, coefficient in zip(
-                            FEATURE_COLUMNS, bad_head.coef_, strict=True
+                            columns, bad_head.coef_, strict=True
                         )
                     },
                 }

@@ -96,3 +96,55 @@ def test_local_minimum_needs_the_centred_window():
     assert bool(flags.iloc[4]) is False
     # Row 1 has no full window before it, so it is never labelled a minimum.
     assert bool(flags.iloc[1]) is False
+
+
+# --- rule indicators ---------------------------------------------------------
+
+
+def test_rule_matrix_carries_no_look_ahead():
+    """A rule column for a date must not move when later data arrives.
+
+    The reversal rule vetoes days with a large negative sentinel. Collapsing
+    that sentinel onto the series minimum would read the whole series to pick
+    the floor, so the feature version splits it into two leak-free columns.
+    """
+    from signal_layer.features import compute_features
+    from signal_layer.rules import RULE_FEATURE_COLUMNS, rule_matrix
+
+    rng = np.random.default_rng(5)
+    rates = list(100 * np.exp(np.cumsum(rng.normal(0, 0.01, 400))))
+    full = rule_matrix(compute_features(_panel(rates)))
+    short = rule_matrix(compute_features(_panel(rates[:300])))
+
+    overlap = short.index.intersection(full.index)
+    assert len(overlap) > 200
+    for column in RULE_FEATURE_COLUMNS:
+        np.testing.assert_allclose(
+            short.loc[overlap, column].to_numpy(dtype=float),
+            full.loc[overlap, column].to_numpy(dtype=float),
+            rtol=1e-12,
+            equal_nan=True,
+        )
+
+
+def test_rule_matrix_has_no_sentinel_values():
+    """The veto sentinel belongs in a score, never in a design matrix."""
+    from signal_layer.features import compute_features
+    from signal_layer.rules import BLOCKED, rule_matrix
+
+    rng = np.random.default_rng(6)
+    rates = list(100 * np.exp(np.cumsum(rng.normal(0, 0.01, 300))))
+    matrix = rule_matrix(compute_features(_panel(rates))).to_numpy(dtype=float)
+    filled = matrix[np.isfinite(matrix)]  # warm-up rows are legitimately NaN
+    assert len(filled) > 0
+    assert (filled > BLOCKED / 2).all()
+
+
+def test_rule_scores_keep_the_veto_sentinel():
+    """As a contender score, the reversal rule must still be able to refuse."""
+    from signal_layer.features import compute_features
+    from signal_layer.rules import BLOCKED, rule_score
+
+    rates = [10.0, 9.0, 8.0, 7.0, 6.0] * 60  # monotone falls, then a jump up
+    scores = rule_score("reversal", compute_features(_panel(rates)))
+    assert (scores == BLOCKED).any(), "days that did not turn up must be vetoed"

@@ -49,18 +49,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 
+from ..rules import BLOCKED as _BLOCKED_SENTINEL
+from ..rules import rule_score
 from ..utility_risk import UtilityRiskConfig, rescore, walk_forward_scores
 from .spec import BenchmarkSpec
 
 SCORE_SCHEMA: tuple[str, ...] = ("quote_date", "available_on", "iso", "rub_per_unit", "score")
 
-# Score assigned to days a rule refuses outright (e.g. the rate did not turn up).
-# Finite, so quantile arithmetic in the policy stays well defined, and paired
-# with a `minimum_score` floor so such a day can never be selected.
-_BLOCKED = -1e6
+_BLOCKED = _BLOCKED_SENTINEL
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,26 +160,9 @@ def get_strategy(name: str) -> Strategy:
 
 
 def _rule_score(name: str, features: pd.DataFrame) -> pd.Series:
-    """Map a rule name onto a column expression over the feature frame."""
-    if name == "percentile":
-        return 1.0 - features["pct_rank_90"]
-    if name == "zscore":
-        return -features["ewma_zscore"]
-    if name == "momentum":
-        # Integer streaks tie constantly; the 5-day return breaks ties inside a
-        # streak level without ever reordering across levels.
-        return features["down_streak"] - features["ret_5"]
-    if name == "drawdown":
-        return features["drawdown_60"]
-    if name == "seasonal":
-        return -features["seasonal_zscore"]
-    if name == "reversal":
-        turned_up = features["ret_1"] > 0
-        return pd.Series(
-            np.where(turned_up, -features["dist_to_min_90"], _BLOCKED),
-            index=features.index,
-        )
-    raise KeyError(f"No rule expression for {name!r}")
+    """One rule's score. Definitions live in ``signal_layer.rules`` because the
+    utility/risk model consumes the same expressions as its feature set."""
+    return rule_score(name, features)
 
 
 class ModelScoreCache:

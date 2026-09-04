@@ -32,6 +32,11 @@ from .spec import BenchmarkSpec
 # series and the markers stop being readable.
 CHART_STRATEGIES: tuple[str, ...] = ("utility_risk", "percentile")
 
+# The "ordinary statistics" the MVP is measured against in question 2.
+RULE_STRATEGIES: tuple[str, ...] = (
+    "zscore", "seasonal", "percentile", "momentum", "drawdown",
+)
+
 # Ordered so the reader meets the contenders before the hindsight references.
 _CEILINGS = ("oracle", "oracle_topk")
 
@@ -330,6 +335,99 @@ def _lambda_chart(sweep: pd.DataFrame) -> str:
         f"{_num(b_lo, 2)}</text>"
     )
     return _svg(width, height, "".join(parts), "Чувствительность к цене ошибки")
+
+
+def _null_histogram(nulls: pd.DataFrame, observed: float, p_value: float) -> str:
+    """Where the strategy lands against the cloud of random schedules.
+
+    A p-value asks the reader to trust the test. The distribution behind it lets
+    them see the answer: 500 schedules that spend the same push budget on days
+    picked at random, and one marker for where the strategy came out.
+    """
+    if nulls.empty or not math.isfinite(observed):
+        return ""
+    values = nulls["currency_uplift_bps"].to_numpy(dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return ""
+    width, height = 900, 220
+    pad_l, pad_r, pad_b, pad_t = 20, 20, 46, 30
+    lo = min(float(values.min()), observed) * 1.15 - 1
+    hi = max(float(values.max()), observed) * 1.15 + 1
+    counts, edges = np.histogram(values, bins=36, range=(lo, hi))
+    peak = max(1, int(counts.max()))
+
+    def px(value: float) -> float:
+        return _scale(value, lo, hi, pad_l, width - pad_r)
+
+    parts = [
+        f'<text x="{pad_l}" y="{pad_t - 12}" class="cap">'
+        f"500 случайных расписаний того же размера</text>",
+        f'<line x1="{pad_l}" y1="{height - pad_b}" x2="{width - pad_r}" '
+        f'y2="{height - pad_b}" class="axis" />',
+    ]
+    for index, count in enumerate(counts):
+        if not count:
+            continue
+        x0, x1 = px(float(edges[index])), px(float(edges[index + 1]))
+        bar_h = (height - pad_b - pad_t) * count / peak
+        parts.append(
+            f'<rect x="{x0:.1f}" y="{height - pad_b - bar_h:.1f}" '
+            f'width="{max(1.0, x1 - x0 - 1):.1f}" height="{bar_h:.1f}" class="fill-null" />'
+        )
+    marker = px(observed)
+    parts.append(
+        f'<line x1="{marker:.1f}" y1="{pad_t - 4}" x2="{marker:.1f}" '
+        f'y2="{height - pad_b}" class="marker-line" />'
+        f'<circle cx="{marker:.1f}" cy="{pad_t - 4}" r="4.5" class="dot-key" />'
+        f'<text x="{marker:.1f}" y="{pad_t - 14}" class="tick mid marker-label">'
+        f"MVP {_num(observed)}</text>"
+    )
+    zero = px(0.0)
+    parts.append(
+        f'<line x1="{zero:.1f}" y1="{pad_t}" x2="{zero:.1f}" y2="{height - pad_b}" '
+        f'class="axis dashed" />'
+        f'<text x="{zero:.1f}" y="{height - pad_b + 17}" class="tick mid">0</text>'
+        f'<text x="{pad_l}" y="{height - pad_b + 17}" class="tick">{_num(lo, 0)}</text>'
+        f'<text x="{width - pad_r}" y="{height - pad_b + 17}" class="tick end">'
+        f"{_num(hi, 0)}</text>"
+        f'<text x="{(pad_l + width - pad_r) / 2:.1f}" y="{height - 8}" class="tick mid">'
+        f"выгода клиента, б.п. · p = {_num(p_value, 3)}</text>"
+    )
+    return _svg(width, height, "".join(parts), "MVP против случайных расписаний")
+
+
+def _rules_comparison(board: pd.DataFrame, rules: tuple[str, ...]) -> str:
+    """The MVP ranked against every ordinary statistical rule."""
+    subset = board[board["strategy"].isin(("utility_risk", *rules))]
+    subset = subset.dropna(subset=["currency_uplift_bps"]).sort_values(
+        "currency_uplift_bps", ascending=False
+    )
+    if subset.empty:
+        return ""
+    width, row_h, top = 900, 30, 28
+    height = top + row_h * len(subset) + 26
+    hi = float(subset["currency_uplift_bps"].max()) * 1.18
+    x0, x1 = 200, width - 120
+    parts = [
+        f'<text x="{x0}" y="16" class="cap">выгода клиента, б.п. на перевод</text>',
+    ]
+    for index, (_, row) in enumerate(subset.iterrows()):
+        y = top + index * row_h
+        value = float(row["currency_uplift_bps"])
+        is_mvp = row["strategy"] == "utility_risk"
+        w = max(1.0, _scale(value, 0, hi, 0, x1 - x0))
+        parts.append(
+            f'<text x="0" y="{y + 15}" class="lbl{" mvp" if is_mvp else ""}">'
+            f'{_esc(row["strategy"])}</text>'
+            f'<rect x="{x0}" y="{y + 4}" width="{w:.1f}" height="14" rx="1.5" '
+            f'class="{"fill-amber" if is_mvp else "fill-ceiling"}" />'
+            f'<text x="{x0 + w + 8:.1f}" y="{y + 15}" class="val">{_num(value)}</text>'
+            f'<title>{_esc(row["strategy"])}: {_num(value)} б.п., '
+            f'{int(row["corridors_positive"])} из {int(row["n_corridors"])} '
+            f"коридоров в плюсе</title>"
+        )
+    return _svg(width, height, "".join(parts), "MVP против статистических правил")
 
 
 def _cadence_chart(sweep: pd.DataFrame) -> str:
@@ -721,6 +819,22 @@ td.bar{width:160px; padding:9px 6px}
 .legend b{color:var(--ink); font-family:"IBM Plex Mono",monospace; font-weight:500}
 .legend code{font-size:11.5px; color:var(--faint)}
 
+.answers{gap:20px}
+.answer{background:var(--surface); border:1px solid var(--hairline); border-radius:3px;
+  padding:22px 24px 20px; display:flex; flex-direction:column; gap:10px;
+  border-left:4px solid var(--hairline)}
+.answer-gain{border-left-color:var(--gain)} .answer-loss{border-left-color:var(--loss)}
+.qnum{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--faint)}
+.answer h3{font-family:"Bricolage Grotesque","IBM Plex Sans",sans-serif;
+  font-size:21px; font-weight:700; letter-spacing:-.01em}
+.verdict{font-size:17px; font-weight:600}
+.answer-gain .verdict{color:var(--gain)} .answer-loss .verdict{color:var(--loss)}
+.answer-body{max-width:66ch; color:var(--ink)}
+.answer-caveat{max-width:66ch; color:var(--muted); font-size:13.5px;
+  border-top:1px solid var(--hairline); padding-top:10px}
+.answer b{font-variant-numeric:tabular-nums}
+
 /* chart primitives */
 .axis{stroke:var(--hairline); stroke-width:1}
 .axis.faint{stroke:var(--hairline); stroke-width:1; opacity:.6}
@@ -735,6 +849,11 @@ td.bar{width:160px; padding:9px 6px}
 .line-amber{stroke:var(--amber)} .dot-amber{fill:var(--amber)}
 .dot-flat{fill:var(--faint)} .line-flat{stroke:var(--faint)}
 .band{fill:var(--ceiling); opacity:.07}
+.fill-null{fill:var(--muted); opacity:.32}
+.fill-amber{fill:var(--amber)}
+.marker-line{stroke:var(--amber); stroke-width:2}
+.marker-label{fill:var(--amber); font-weight:600}
+.lbl.mvp{fill:var(--amber)}
 .trend{stroke-width:1.5; stroke-dasharray:5 4}
 .trend-gain{stroke:var(--gain)} .trend-loss{stroke:var(--loss)}
 .dot{fill:var(--faint)} .dot-key{fill:var(--amber)}
@@ -803,6 +922,7 @@ def render_dashboard(
     signals = frames["signals"]
     audit = frames.get("audit", pd.DataFrame())
     cadence = frames.get("cadence_sweep", pd.DataFrame())
+    nulls = frames.get("null_distribution", pd.DataFrame())
     indexed = board.set_index("strategy")
 
     def value_of(strategy: str, column: str = "currency_uplift_bps") -> float | None:
@@ -844,7 +964,55 @@ def render_dashboard(
         for index, iso in enumerate(corridors)
     )
 
+    mvp_nulls = nulls[nulls["strategy"].eq("utility_risk")] if len(nulls) else nulls
+    rules_present = tuple(r for r in RULE_STRATEGIES if r in set(board["strategy"]))
     mvp_uplift = value_of("utility_risk")
+    mvp_p = value_of("utility_risk", "p_value")
+    mvp_row = indexed.loc["utility_risk"] if "utility_risk" in indexed.index else None
+    q1_pos = int(mvp_row["corridors_positive"]) if mvp_row is not None else 0
+    q1_total = int(mvp_row["n_corridors"]) if mvp_row is not None else 0
+    q1_beats_random = bool(
+        mvp_uplift is not None and mvp_uplift > 0 and mvp_p is not None and mvp_p <= 0.05
+    )
+    q1_tone = "gain" if q1_beats_random else "loss"
+    q1_verdict = (
+        "Лучше, и это статистически значимо — но неустойчиво по коридорам."
+        if q1_beats_random
+        else "Не отличим от случайного дня."
+    )
+    mvp_null_chart = _null_histogram(mvp_nulls, mvp_uplift or float("nan"), mvp_p or float("nan"))
+    best_rule, best_rule_value = None, None
+    for name in rules_present:
+        value = value_of(name)
+        if value is not None and (best_rule_value is None or value > best_rule_value):
+            best_rule, best_rule_value = name, value
+    beats_rules = bool(
+        mvp_uplift is not None and best_rule_value is not None and mvp_uplift >= best_rule_value
+    )
+    q2_tone = "gain" if beats_rules else "loss"
+    q2_verdict = (
+        "Лучше лучшего правила." if beats_rules else "Не лучше. Хуже, и заметно."
+    )
+    if beats_rules:
+        q2_body = (
+            f"MVP даёт {_num(mvp_uplift)} б.п. против {_num(best_rule_value)} "
+            f"у сильнейшего правила ({_esc(best_rule)})."
+        )
+    else:
+        behind = (best_rule_value or 0.0) - (mvp_uplift or 0.0)
+        ahead = [
+            name for name in rules_present
+            if (value_of(name) or float("-inf")) > (mvp_uplift or 0.0)
+        ]
+        q2_body = (
+            f"MVP даёт {_num(mvp_uplift)} б.п., а простое правило "
+            f"«{_esc(best_rule)}» — {_num(best_rule_value)} б.п. Разрыв "
+            f"{_num(behind)} б.п. не в нашу пользу, и MVP обгоняют "
+            f"{len(ahead)} из {len(rules_present)} базовых правил. "
+            f"Правила при этом положительны на всех пяти коридорах, а MVP — "
+            f"на {q1_pos}. Честный вывод: на этих данных обучаемая модель "
+            f"не бьёт хорошо выбранную статистику."
+        )
     pct_uplift = value_of("percentile")
     conflict_lo = value_of("oracle_topk", "hit_favourable")
     conflict_lift = value_of("oracle_topk", "hit_lift_favourable")
@@ -875,6 +1043,45 @@ def render_dashboard(
 </header>
 
 <div class="kpis">{_kpis(board, audit)}</div>
+
+<section class="answers">
+  <div class="claim">
+    <h2>Два вопроса, на которые отвечает эта страница</h2>
+    <p>MVP — модель полезности и риска: три головы, обученные walk-forward, и
+      решение «слать или молчать» по счёту в базисных пунктах. Ниже — прямые
+      ответы, остальная страница их обосновывает.</p>
+  </div>
+
+  <article class="answer answer-{q1_tone}">
+    <p class="qnum">Вопрос 1</p>
+    <h3>Насколько MVP лучше перевода в случайный день?</h3>
+    <p class="verdict">{q1_verdict}</p>
+    <p class="answer-body">Клиент, переводящий в дни сигналов, получает на
+      <b>{_num(mvp_uplift)} б.п.</b> больше валюты, чем если бы перевёл в
+      соседний день наугад. Случайных расписаний того же размера разыграно 500;
+      выигрыш выше почти всех из них — <b>p = {_num(mvp_p, 3)}</b>. На переводе
+      в 100 000 ₽ это примерно {_num(abs(mvp_uplift) * 10, 0)} ₽.</p>
+    <p class="answer-caveat">Оговорка, которая важнее самой цифры: выигрыш
+      положителен лишь на <b>{q1_pos} коридорах из {q1_total}</b> и почти
+      целиком приходится на волатильность 2022 года. Как устойчивый результат
+      это пока не читается.</p>
+    {mvp_null_chart}
+  </article>
+
+  <article class="answer answer-{q2_tone}">
+    <p class="qnum">Вопрос 2</p>
+    <h3>Насколько MVP лучше обычной статистики?</h3>
+    <p class="verdict">{q2_verdict}</p>
+    <p class="answer-body">{q2_body}</p>
+    <p class="answer-caveat">Это проверено с трёх сторон, и ни одна не спасает
+      модель: набор признаков (сырые 22 против весов на индикаторах — 14.0
+      против −7.0 б.п.), сила регуляризации (α от 1 до 30 000 — монотонно хуже)
+      и цена ошибки λ (кривая плоская). Правила выигрывают не случайно: при
+      сигнале ~15 б.п. против σ ~300 одна робастная статистика бьёт любую
+      линейную комбинацию, подогнанную под такой шум.</p>
+    {_rules_comparison(board, RULE_STRATEGIES)}
+  </article>
+</section>
 
 <section>
   <div class="claim">

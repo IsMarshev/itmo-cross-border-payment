@@ -38,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bootstrap-trials", type=int, default=1000)
     parser.add_argument("--refit-every", type=int, default=21)
     parser.add_argument("--min-train", type=int, default=750)
+    parser.add_argument(
+        "--feature-set", choices=["raw", "rules", "both"], default="raw",
+        help="design matrix for the utility/risk heads",
+    )
+    parser.add_argument("--ridge-alpha", type=float, default=1.0)
+    parser.add_argument("--logit-l2", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--no-audit", action="store_true")
     return parser
@@ -65,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         lam=args.lam,
         min_train=args.min_train,
         refit_every=args.refit_every,
+        feature_set=args.feature_set,
+        ridge_alpha=args.ridge_alpha,
+        logit_l2=args.logit_l2,
     )
 
     panel = read_rate_directory(data_dir, currencies=spec.all_currencies)
@@ -86,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         ("horizons", result.horizon_table),
         ("lambda_sweep", result.lambda_sweep),
         ("cadence_sweep", result.cadence_sweep),
+        ("null_distribution", result.null_distribution),
         ("audit", result.audit),
         ("signals", result.signals),
         ("coefficients", result.coefficients),

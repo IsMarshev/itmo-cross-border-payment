@@ -143,3 +143,24 @@ def test_a_higher_price_of_error_never_favours_a_riskier_day():
 def test_config_rejects_a_negative_price_of_error():
     with pytest.raises(ValueError, match="lam"):
         UtilityRiskConfig(lam=-1.0)
+
+
+def test_every_feature_set_produces_scores():
+    panel = _synthetic_panel()
+    for feature_set in ("raw", "rules", "both"):
+        config = UtilityRiskConfig(
+            horizon=5, min_train=400, refit_every=40, feature_set=feature_set
+        )
+        scores, coefficients = walk_forward_scores(panel, "TJS", config)
+        assert not scores.empty, feature_set
+        assert scores["score"].notna().all()
+        # One coefficient column per design-matrix column, so the model stays
+        # inspectable whichever matrix it was given.
+        assert len(coefficients)
+        for column in config.columns:
+            assert f"u_{column}" in coefficients.columns
+
+
+def test_unknown_feature_set_is_rejected():
+    with pytest.raises(ValueError, match="feature_set"):
+        UtilityRiskConfig(feature_set="magic")

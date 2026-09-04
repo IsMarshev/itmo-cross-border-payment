@@ -310,3 +310,14 @@ def test_headline_cadence_stays_inside_the_briefs_band():
     gate = next(g for g in spec.gates if g.name == "G4_frequency")
     assert gate.bound == (1.0, 2.0), "the brief mandates 1-2 signals per week"
     assert spec.cadence.per_week <= 2.0
+
+
+def test_null_distribution_is_persisted_and_centred(small_run):
+    """The p-value's evidence must ship with the p-value."""
+    nulls = small_run.null_distribution
+    assert len(nulls)
+    assert set(nulls["strategy"]) <= set(small_run.leaderboard["strategy"])
+    for _, group in nulls.groupby("strategy"):
+        # A matched random schedule has no expected edge by construction.
+        assert abs(float(group["currency_uplift_bps"].mean())) < 10.0
+        assert group["trial"].is_unique
