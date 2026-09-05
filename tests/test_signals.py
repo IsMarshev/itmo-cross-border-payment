@@ -64,7 +64,10 @@ def test_every_signal_carries_a_message_whose_claim_is_true():
     # The message claims the rate sits below its trend; that must be so.
     assert (result["deviation_pct"] < 0).all()
     for _, row in result.head(50).iterrows():
-        claimed = float(row["message"].split("на ")[1].split("%")[0])
+        # The sentence is written for a Russian reader, so the number in it
+        # carries a comma and has to be parsed back as one.
+        spoken = row["message"].split("на ")[1].split("%")[0]
+        claimed = float(spoken.replace(",", "."))
         assert claimed == pytest.approx(abs(float(row["deviation_pct"])), abs=0.05)
 
 

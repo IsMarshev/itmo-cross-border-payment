@@ -220,9 +220,13 @@ def _message(currency: str, deviation: float, span: int) -> str:
     in the present tense with past evidence. No forecast, no promise, nothing
     that reads as advice — the brief bars any claim about where the rate goes
     next, stated or implied. Emitted only when the fact is actually true.
+
+    The sentence is read by a Russian-speaking client, so the decimal separator
+    is a comma. Python formats one with a point, hence the substitution.
     """
+    percent = f"{abs(deviation):.1f}".replace(".", ",")
     return (
-        f"Курс {currency} сейчас на {abs(deviation):.1f}% ниже своего среднего "
+        f"Курс {currency} сейчас на {percent}% ниже своего среднего "
         f"за последние {span} наблюдений."
     )
 

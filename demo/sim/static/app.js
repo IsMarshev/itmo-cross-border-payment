@@ -16,6 +16,7 @@
   };
   var AMOUNT = 50000;
   var SEND_TIME = "09:30";
+  var LOCAL = " по вашему времени";   // пуш уходит волнами по часовым поясам
   var TICK_MS = 650;
   var VISIBLE = 120;
 
@@ -152,7 +153,7 @@
   }
 
   function freshnessBlock() {
-    var stamp = ru(fresh.signal_date) + ", " + SEND_TIME;
+    var stamp = ru(fresh.signal_date) + ", " + SEND_TIME + LOCAL;
     var gotThen = AMOUNT / fresh.signal_rate, gotNow = AMOUNT / fresh.current_rate;
     if (fresh.level === "same") {
       return '<div class="freshness ok"><span class="dot"></span><span><b>Данные актуальны на ' + stamp +
@@ -202,7 +203,7 @@
     return '<div class="sheet-scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">' +
       '<div class="grabber"></div>' +
       '<h3 id="sheetTitle">Курс изменился с момента уведомления</h3>' +
-      '<p class="stale-line">Данные были актуальны на <b>' + ru(fresh.signal_date) + ", " + SEND_TIME +
+      '<p class="stale-line">Данные были актуальны на <b>' + ru(fresh.signal_date) + ", " + SEND_TIME + LOCAL +
       "</b>. Актуальные данные могли измениться — ниже курс на " + ru(fresh.current_date) + ".</p>" +
       '<div class="compare">' +
       '<div class="side"><div class="cap">в уведомлении</div><div class="val">' + fmt(fresh.signal_rate, d) +
@@ -214,9 +215,9 @@
       fmt(AMOUNT, 0) + " ₽ получатель получит на <b>" + fmt(gotThen - gotNow, 2) + " " + iso +
       "</b> меньше, чем было в уведомлении.</p>" +
       '<div class="sheet-actions">' +
-      '<button class="btn" id="acceptBtn" type="button">Перевести по текущему курсу</button>' +
-      '<button class="btn grey" id="notifyBtn" type="button">Напомнить при следующем сигнале</button>' +
-      '<button class="btn ghost" id="closeSheet" type="button">Не сейчас</button></div>' +
+      '<button class="btn equal" id="acceptBtn" type="button">Перевести по текущему курсу</button>' +
+      '<button class="btn equal" id="closeSheet" type="button">Не сейчас</button>' +
+      '<button class="btn quiet" id="notifyBtn" type="button">Напомнить при следующем сигнале</button></div>' +
       '<p class="why">Курс ЦБ РФ, без спреда и комиссии перевода</p>' +
       "</div></div>";
   }

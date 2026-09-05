@@ -310,6 +310,13 @@ svg.chart { display: block; width: 100%; height: auto; }
 .btn.ghost:hover { background: var(--red-wash); }
 .btn.grey { background: var(--sunken); color: var(--ink); }
 .btn.grey:hover { background: var(--line); }
+/* Плохой сценарий: курс ушёл против клиента, и мы не знаем, что для него
+   правильно. Поэтому «перевести» и «не сейчас» получают одинаковый вес —
+   красная кнопка здесь подталкивала бы к тому, что стоит ему денег. */
+.btn.equal { background: var(--paper); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.btn.equal:hover { background: var(--sunken); }
+.btn.quiet { background: transparent; color: var(--muted); font-weight: 500; }
+.btn.quiet:hover { background: var(--sunken); color: var(--ink); }
 .appfoot { padding: 12px 16px 18px; background: var(--paper); border-top: 1px solid var(--line); flex: none; }
 
 /* Шторка «момент изменился» */
@@ -712,7 +719,7 @@ footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space
           <tr>
             <td><b>Ниже своего тренда</b><br><span class="small">то, что отправляется сейчас</span></td>
             <td>курс вниз</td>
-            <td>«Курс сомони сейчас на 1,7 % ниже своего среднего за последние 10 наблюдений»</td>
+            <td>«Курс сомони сейчас на 1,7% ниже своего среднего за последние 10 наблюдений»</td>
             <td><code>deviation_pct &lt; 0</code> на выбранном окне — иначе день не получает слот</td>
           </tr>
           <tr>
@@ -1020,6 +1027,7 @@ footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space
   var ISO = "TJS";
   var AMOUNT = 50000;
   var SEND_TIME = "09:30";
+  var LOCAL = " по вашему времени";   // пуш уходит волнами по часовым поясам
   var scenario = SCENARIOS[0];
   var sheetOpen = false;
   var view = "lock";
@@ -1049,7 +1057,7 @@ footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space
   }
 
   function freshnessBlock(st) {
-    var stamp = ru(st.sig.date) + ", " + SEND_TIME;
+    var stamp = ru(st.sig.date) + ", " + SEND_TIME + LOCAL;
     if (st.level === "same") {
       return '<div class="freshness ok"><span class="dot"></span><span><b>Данные актуальны на ' + stamp + '</b><br>Курс с момента уведомления не менялся.</span></div>';
     }
@@ -1071,7 +1079,7 @@ footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space
       '<span class="push-head"><span class="logo" aria-hidden="true">А</span>Альфа-Банк<span class="when">сейчас</span></span>' +
       "<b>Переводы за рубеж</b>" +
       "<p>Курс " + D.corridors[ISO].name + " сейчас на " + fmt(Math.abs(st.sig.deviation_pct), 1) +
-      " % ниже своего среднего за последние " + st.sig.span + " наблюдений.</p>" +
+      "% ниже своего среднего за последние " + st.sig.span + " наблюдений.</p>" +
       "</button>" +
       '<div class="lock-hint">Нажмите на уведомление</div>' +
       "</div>";
@@ -1096,7 +1104,7 @@ footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space
       "</div>" +
       '<div class="tile"><div class="tile-label" style="margin-bottom:6px">Почему мы написали</div>' +
       '<div class="fact">' + "Курс " + D.corridors[ISO].name + " на " + fmt(Math.abs(st.sig.deviation_pct), 1) +
-      " % ниже своего среднего за последние " + st.sig.span + " наблюдений. Данные ЦБ на " + ru(st.sig.date) + ".</div>" +
+      "% ниже своего среднего за последние " + st.sig.span + " наблюдений. Данные ЦБ на " + ru(st.sig.date) + ".</div>" +
       "</div>" +
       '<p class="small">Сумма и получатель подставлены из ваших прошлых переводов — их можно изменить.</p>' +
       "</div>" +
@@ -1110,7 +1118,7 @@ footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space
     return '<div class="sheet-scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">' +
       '<div class="grabber"></div>' +
       '<h3 id="sheetTitle">Курс изменился с момента уведомления</h3>' +
-      '<p class="stale-line">Данные были актуальны на <b>' + ru(st.sig.date) + ", " + SEND_TIME +
+      '<p class="stale-line">Данные были актуальны на <b>' + ru(st.sig.date) + ", " + SEND_TIME + LOCAL +
       "</b>. Актуальные данные могли измениться — ниже курс на " + ru(st.now.d) + ".</p>" +
       '<div class="compare">' +
       '<div class="side"><div class="cap">в уведомлении</div><div class="val">' + fmt(st.sig.rate, digits) + ' ₽</div><div class="sub">≈ ' + fmt(st.gotThen, 2) + " " + ISO + "</div></div>" +
@@ -1120,9 +1128,9 @@ footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space
       '<p class="delta-line">Курс изменился на <b>' + pct(st.deltaBps) + "</b> не в вашу пользу: при переводе " + fmt(AMOUNT, 0) +
       " ₽ получатель получит на <b>" + fmt(st.gotThen - st.gotNow, 2) + " " + ISO + "</b> меньше, чем было в уведомлении.</p>" +
       '<div class="sheet-actions">' +
-      '<button class="btn" type="button">Перевести по текущему курсу</button>' +
-      '<button class="btn grey" type="button" id="notifyBtn">Напомнить при следующем сигнале</button>' +
-      '<button class="btn ghost" type="button" id="closeSheet">Не сейчас</button>' +
+      '<button class="btn equal" type="button">Перевести по текущему курсу</button>' +
+      '<button class="btn equal" type="button" id="closeSheet">Не сейчас</button>' +
+      '<button class="btn quiet" type="button" id="notifyBtn">Напомнить при следующем сигнале</button>' +
       "</div>" +
       '<p class="why">Курс ЦБ РФ, без спреда и комиссии перевода</p>' +
       "</div></div>";
@@ -1131,7 +1139,7 @@ footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space
   function renderRail(st) {
     var steps = [
       { t: "Слой выбрал день", p: "Счёт выше скользящего порога, недельный бюджет не исчерпан, факт проверен и истинен. Дата котировки — " + ru(st.sig.date) + "." },
-      { t: "Пуш ушёл в " + SEND_TIME, p: "Одно предложение с проверяемым фактом и ровно одним следующим действием. В payload уходит снимок: дата котировки, курс, текст факта." },
+      { t: "Пуш ушёл в " + SEND_TIME + LOCAL, p: "Одно предложение с проверяемым фактом и ровно одним следующим действием. В payload уходит снимок: дата котировки, курс, текст факта." },
       { t: "Клиент открыл уведомление", p: "Открыл " + scenario.when + " — " + ru(st.now.d) + ", " + scenario.time + ". Приложение сравнивает снимок из пуша с текущей котировкой." },
       {
         t: st.level === "stale" ? "Модальное окно: момент изменился" : "Экран перевода предзаполнен",

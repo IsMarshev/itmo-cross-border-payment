@@ -178,6 +178,7 @@ class SimulationService:
         span = int(str(row["window"]).split("=")[1]) if "=" in str(row["window"]) else 0
         name = CURRENCY_NAMES.get(iso, (iso, ""))[0]
         strength = float(row["strength_pct"])
+        message = str(row["message"])
         return {
             "date": row["signal_date"].strftime("%Y-%m-%d"),
             "iso": iso,
@@ -190,12 +191,12 @@ class SimulationService:
             "direction": str(row["direction"]),
             "strength_pct": None if not np.isfinite(strength) else round(strength, 4),
             # What the layer emits, kept verbatim so the claim is auditable.
-            "message": str(row["message"]),
-            # The same fact with the word a client recognises instead of the code.
-            "client_message": (
-                f"Курс {name} сейчас на {abs(deviation):.1f} % ниже своего "
-                f"среднего за последние {span} наблюдений."
-            ),
+            "message": message,
+            # The same sentence with the word a client recognises in place of the
+            # code. Substituting rather than re-composing keeps one template: a
+            # second copy of the wording is a second thing compliance has to
+            # approve, and it drifts the moment one side is edited.
+            "client_message": message.replace(iso, name, 1),
         }
 
     # ── queries ──────────────────────────────────────────────────────────
