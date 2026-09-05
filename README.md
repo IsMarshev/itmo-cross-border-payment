@@ -23,15 +23,15 @@ docker compose up --build
 ## Setup
 
 ```bash
-poetry install
-poetry run pytest
-poetry run ruff check .
+uv sync
+uv run pytest
+uv run ruff check .
 ```
 
 ## Minimal API
 
 ```bash
-poetry run uvicorn signal_layer.api.app:app --reload
+uv run uvicorn signal_layer.api.app:app --reload
 ```
 
 The service exposes:
@@ -83,7 +83,7 @@ Run the canonical baseline backtest and write an exhaustive decision journal,
 matched random schedules and a summary report:
 
 ```bash
-poetry run python -m signal_layer.run_backtest \
+uv run python -m signal_layer.run_backtest \
   --corridors TJS UZS KGS AMD KZT \
   --score-source baseline \
   --horizon 20 \
@@ -101,7 +101,7 @@ intervals, matched-random comparison, risk, signal frequency and outcome
 distribution. Regenerate it independently with:
 
 ```bash
-poetry run python -m signal_layer.dashboard --report-dir reports/backtest
+uv run python -m signal_layer.dashboard --report-dir reports/backtest
 ```
 
 ## Rate data contract
