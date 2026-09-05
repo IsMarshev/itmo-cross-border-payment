@@ -20,8 +20,8 @@ from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi import Path as PathParam
 from fastapi.staticfiles import StaticFiles
 
-from signal_layer.config import Settings
-from signal_layer.services import RateService, SimulationService
+from src.signal_layer.config import Settings
+from src.signal_layer.services import RateService, SimulationService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DEMO_DIR = Path(__file__).resolve().parents[1]

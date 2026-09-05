@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Data foundation for a cross-border payment exchange-rate signal layer."
 authors = [{ name = "ITMO Cross-Border Payment Team" }]
 readme = "README.md"
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.10,<3.15"
 dependencies = [
     "fastapi>=0.115,<1.0",
     "pandas>=2.2,<3.0",
