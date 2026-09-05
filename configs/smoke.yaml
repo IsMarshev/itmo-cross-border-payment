@@ -1,0 +1,32 @@
+# Short real-data integration run, NOT an estimate of production model quality.
+seed: 42
+data:
+  directory: currency_data
+  start: '2020-01-01'
+  end: '2023-07-01'
+  corridors: [TJS, KZT]
+  context: [USD, EUR, CNY]
+model:
+  methods: [catboost, linear, random_walk, random_walk_drift, ar1, ets, rule_value, rule_momentum, rule_reversal, rule_seasonal, random_policy]
+  iterations: 15
+  depth: 3
+  threads: 2
+  simulation_paths: 32
+  min_train_rows: 120
+  min_calibration_rows: 20
+  train_window_days: 730
+  calibration_days: 120
+  tuning_days: 120
+policy:
+  level_thresholds: [0.25, 0.35]
+  probability_thresholds: [0.45, 0.65]
+  contact_costs_bps: [0.0]
+  min_tuning_signals: 2
+backtest:
+  start: '2023-03-01'
+  end: '2023-04-29'
+  fold_days: 30
+  holdout_days: 30
+  bootstrap_samples: 30
+  random_repeats: 5
+  ablations: true

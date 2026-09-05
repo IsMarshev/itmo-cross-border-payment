@@ -1,0 +1,28 @@
+# All paths are relative to the working directory. Run commands from repo root.
+seed: 42
+data:
+  directory: currency_data
+  start: '2011-01-01'
+  corridors: [TJS, UZS, KGS, AMD, KZT]
+  context: [USD, EUR, CNY]
+  # CBR CSV date is the effective date. No invented previous-day publication time.
+  availability_lag_days: 0
+model:
+  methods: [catboost, linear, random_walk, random_walk_drift, ar1, ets, rule_value, rule_momentum, rule_reversal, rule_seasonal, random_policy]
+  iterations: 300
+  depth: 5
+  threads: 4
+  train_window_days: 1825
+  calibration_days: 180
+  tuning_days: 180
+targets:
+  horizons: [1, 3, 5, 10, 20]
+  primary_horizon: 5
+  opening_horizon: 1
+backtest:
+  start: '2023-01-01'
+  fold_days: 90
+  holdout_days: 180
+  bootstrap_samples: 300
+  random_repeats: 100
+  ablations: true
