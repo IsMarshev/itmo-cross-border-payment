@@ -1,0 +1,1244 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Сигнальный слой · демо-стенд</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* ─────────────────────────────────────────────────────────────
+   Палитра: фирменный красный Альфа-Банка как единственный акцент.
+   Семантика (лучше/хуже/внимание) намеренно вынесена из акцента,
+   чтобы красный не означал одновременно «бренд» и «плохо».
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --red: #EF3124;
+  --red-press: #C7291E;
+  --red-wash: #FDECEA;
+
+  --ink: #0C0D0E;
+  --ink-2: #43484E;
+  --muted: #7C838B;
+
+  --paper: #FFFFFF;
+  --ground: #F1F2F4;
+  --sunken: #E9EBEE;
+  --line: #E0E3E7;
+  --line-strong: #CBD0D6;
+
+  --gain: #0E7C55;
+  --gain-wash: #E7F4EE;
+  --warn: #9A5B00;
+  --warn-wash: #FDF2E0;
+
+  --shadow: 0 1px 2px rgba(12,13,14,.06), 0 8px 24px rgba(12,13,14,.06);
+  --shadow-lift: 0 2px 6px rgba(12,13,14,.08), 0 18px 48px rgba(12,13,14,.14);
+
+  --radius: 16px;
+  --radius-sm: 10px;
+
+  --sans: "Golos Text", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --red: #FF4C3D;
+    --red-press: #FF6E62;
+    --red-wash: #33150F;
+    --ink: #ECEEF1;
+    --ink-2: #B4BAC2;
+    --muted: #868D96;
+    --paper: #17191D;
+    --ground: #0D0E11;
+    --sunken: #1E2126;
+    --line: #292D33;
+    --line-strong: #3A4048;
+    --gain: #3DBE8B;
+    --gain-wash: #10251C;
+    --warn: #E0A44A;
+    --warn-wash: #2A1F0E;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.4);
+    --shadow-lift: 0 2px 6px rgba(0,0,0,.5), 0 18px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  --red: #FF4C3D;
+  --red-press: #FF6E62;
+  --red-wash: #33150F;
+  --ink: #ECEEF1;
+  --ink-2: #B4BAC2;
+  --muted: #868D96;
+  --paper: #17191D;
+  --ground: #0D0E11;
+  --sunken: #1E2126;
+  --line: #292D33;
+  --line-strong: #3A4048;
+  --gain: #3DBE8B;
+  --gain-wash: #10251C;
+  --warn: #E0A44A;
+  --warn-wash: #2A1F0E;
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.4);
+  --shadow-lift: 0 2px 6px rgba(0,0,0,.5), 0 18px 48px rgba(0,0,0,.55);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 16px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+h1, h2, h3, h4 { margin: 0; text-wrap: balance; letter-spacing: -.02em; }
+h1 { font-size: clamp(30px, 4.4vw, 46px); font-weight: 700; line-height: 1.08; }
+h2 { font-size: clamp(23px, 2.6vw, 30px); font-weight: 600; line-height: 1.15; }
+h3 { font-size: 18px; font-weight: 600; }
+p { margin: 0; }
+a { color: inherit; }
+ul { margin: 0; padding-left: 18px; }
+li + li { margin-top: 5px; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+.eyebrow {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.lede { color: var(--ink-2); max-width: 64ch; font-size: 17px; }
+.small { font-size: 14px; color: var(--muted); line-height: 1.5; }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* ── Шапка ───────────────────────────────────────────────── */
+.topbar {
+  position: sticky; top: 0; z-index: 40;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: saturate(1.6) blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.topbar .wrap { display: flex; align-items: center; gap: 20px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.01em; }
+.logo {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--red); color: #fff;
+  display: grid; place-items: center;
+  font-weight: 700; font-size: 15px; line-height: 1;
+  flex: none;
+}
+.brand small { color: var(--muted); font-weight: 400; }
+.topnav { margin-left: auto; display: flex; gap: 4px; }
+.topnav a {
+  text-decoration: none; color: var(--ink-2);
+  font-size: 14px; padding: 7px 11px; border-radius: 8px;
+}
+.topnav a:hover { background: var(--sunken); color: var(--ink); }
+.iconbtn {
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink-2);
+  width: 34px; height: 34px; border-radius: 9px; cursor: pointer; flex: none;
+  font-size: 15px; line-height: 1;
+}
+.iconbtn:hover { border-color: var(--line-strong); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; border-radius: 4px; }
+
+/* ── Секции ──────────────────────────────────────────────── */
+section { padding: 62px 0 8px; }
+.sec-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 26px; }
+.sec-head .row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+
+.card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.pad { padding: 22px; }
+
+/* ── Титул ───────────────────────────────────────────────── */
+.hero { padding-top: 54px; }
+.hero-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 34px; align-items: end; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 30px; }
+.kpi { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 16px 14px; }
+.kpi b { display: block; font-size: 27px; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.kpi span { display: block; font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+.kpi.accent b { color: var(--red); }
+
+.tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  padding: 6px 9px; border-radius: 100px; border: 1px solid var(--line-strong); color: var(--ink-2);
+  white-space: nowrap;
+}
+.tag.ok { color: var(--gain); border-color: color-mix(in srgb, var(--gain) 40%, transparent); background: var(--gain-wash); }
+.tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-wash); }
+.tag.red { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); background: var(--red-wash); }
+
+/* ── График ──────────────────────────────────────────────── */
+.chart-card { display: grid; grid-template-columns: 1fr 322px; }
+.chart-main { padding: 20px 22px 16px; border-right: 1px solid var(--line); min-width: 0; }
+.chart-side { padding: 20px 22px; background: var(--sunken); border-radius: 0 var(--radius) var(--radius) 0; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tab {
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink-2);
+  padding: 7px 13px; border-radius: 100px; cursor: pointer;
+  font: 500 14px/1 var(--sans);
+}
+.tab:hover { border-color: var(--line-strong); }
+.tab[aria-selected="true"] { background: var(--red); border-color: var(--red); color: #fff; }
+svg.chart { display: block; width: 100%; height: auto; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.legend i { width: 16px; height: 2px; display: inline-block; vertical-align: middle; margin-right: 6px; }
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; font-size: 14px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+.audit { display: flex; gap: 8px; flex-wrap: wrap; }
+.audit-chip {
+  border: 1px solid color-mix(in srgb, var(--gain) 35%, transparent);
+  background: var(--gain-wash); color: var(--gain);
+  border-radius: 10px; padding: 8px 11px; font: 500 13px/1.3 var(--mono);
+}
+
+/* ── Клиентский путь ─────────────────────────────────────── */
+.journey { display: grid; grid-template-columns: 392px 1fr; gap: 30px; align-items: start; }
+.stage { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+
+.phone {
+  width: 366px; height: 748px; flex: none; position: relative;
+  border-radius: 46px; padding: 11px;
+  background: linear-gradient(160deg, #2A2C31, #131418 60%);
+  box-shadow: var(--shadow-lift);
+}
+.screen {
+  position: relative; width: 100%; height: 100%; overflow: hidden;
+  border-radius: 36px; background: var(--paper); color: var(--ink);
+  display: flex; flex-direction: column;
+}
+.notch {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  width: 108px; height: 26px; border-radius: 100px; background: #0B0B0D; z-index: 6;
+}
+.statusbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 13px 22px 4px; font-size: 13px; font-weight: 600; flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.statusbar .sig { letter-spacing: 1px; font-size: 11px; color: var(--ink-2); }
+
+/* Экран блокировки */
+.lock {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  padding: 26px 14px 22px;
+  background: linear-gradient(168deg, #F6DCD8 0%, #EFB6AE 42%, #C7564A 100%);
+  color: #24120F;
+}
+:root[data-theme="dark"] .lock, :root:not([data-theme="light"]) .lock { color: #24120F; }
+.lock-time { font-size: 66px; font-weight: 600; letter-spacing: -.04em; line-height: 1; margin-top: 22px; font-variant-numeric: tabular-nums; }
+.lock-date { font-size: 15px; opacity: .82; margin-top: 6px; }
+.push {
+  width: 100%; margin-top: 34px; border-radius: 18px; padding: 12px 14px;
+  background: rgba(255,255,255,.86); backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px rgba(60,20,15,.16);
+  color: #101114; text-align: left; border: 0; cursor: pointer;
+  display: block; font: inherit;
+  animation: pushIn .5s cubic-bezier(.2,.8,.25,1) both;
+}
+@keyframes pushIn { from { opacity: 0; transform: translateY(-10px) scale(.97); } }
+.push:hover { background: rgba(255,255,255,.95); }
+.push-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #55585E; margin-bottom: 5px; }
+.push-head .logo { width: 19px; height: 19px; border-radius: 5px; font-size: 11px; }
+.push-head .when { margin-left: auto; }
+.push b { display: block; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.push p { font-size: 14px; line-height: 1.35; color: #23262B; }
+.lock-hint { margin-top: auto; font-size: 13px; opacity: .8; }
+
+/* Экран перевода */
+.app { flex: 1; display: flex; flex-direction: column; background: var(--ground); overflow: hidden; }
+.appbar {
+  display: flex; align-items: center; gap: 10px; padding: 8px 18px 12px;
+  background: var(--paper); border-bottom: 1px solid var(--line); flex: none;
+}
+.appbar .back { color: var(--red); font-size: 22px; line-height: 1; cursor: pointer; background: none; border: 0; padding: 0; }
+.appbar h4 { font-size: 16px; font-weight: 600; }
+.appbody { flex: 1; overflow-y: auto; padding: 14px 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.tile { background: var(--paper); border-radius: 14px; padding: 14px; border: 1px solid var(--line); }
+.tile-row { display: flex; align-items: center; gap: 12px; }
+.avatar {
+  width: 42px; height: 42px; border-radius: 50%; flex: none;
+  background: var(--sunken); display: grid; place-items: center;
+  font-weight: 600; font-size: 15px; color: var(--ink-2);
+}
+.tile-row .grow { flex: 1; min-width: 0; }
+.tile-label { font-size: 12px; color: var(--muted); }
+.tile-value { font-size: 15px; font-weight: 500; }
+.amount { font-size: 30px; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.gets { font-size: 15px; color: var(--ink-2); }
+.gets b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+.freshness {
+  border-radius: 12px; padding: 11px 13px; font-size: 13px; line-height: 1.4;
+  display: flex; gap: 9px; align-items: flex-start;
+}
+.freshness .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 5px; }
+.freshness.ok { background: var(--gain-wash); color: var(--gain); }
+.freshness.ok .dot { background: var(--gain); }
+.freshness.note { background: var(--sunken); color: var(--ink-2); }
+.freshness.note .dot { background: var(--muted); }
+.freshness.warn { background: var(--warn-wash); color: var(--warn); }
+.freshness.warn .dot { background: var(--warn); }
+.freshness b { font-weight: 600; }
+
+.fact {
+  border-left: 3px solid var(--red); padding: 2px 0 2px 11px;
+  font-size: 13px; color: var(--ink-2); line-height: 1.4;
+}
+.btn {
+  display: block; width: 100%; text-align: center; border: 0; cursor: pointer;
+  background: var(--red); color: #fff; padding: 15px; border-radius: 13px;
+  font: 600 16px/1 var(--sans);
+}
+.btn:hover { background: var(--red-press); }
+.btn.ghost { background: transparent; color: var(--red); }
+.btn.ghost:hover { background: var(--red-wash); }
+.btn.grey { background: var(--sunken); color: var(--ink); }
+.btn.grey:hover { background: var(--line); }
+.appfoot { padding: 12px 16px 18px; background: var(--paper); border-top: 1px solid var(--line); flex: none; }
+
+/* Шторка «момент изменился» */
+.sheet-scrim {
+  position: absolute; inset: 0; z-index: 8; background: rgba(10,11,13,.42);
+  display: flex; align-items: flex-end;
+  animation: fade .22s ease both;
+}
+@keyframes fade { from { opacity: 0; } }
+.sheet {
+  width: 100%; background: var(--paper); border-radius: 22px 22px 36px 36px;
+  padding: 8px 18px 20px; display: flex; flex-direction: column; gap: 13px;
+  animation: rise .3s cubic-bezier(.2,.8,.25,1) both;
+  max-height: 88%; overflow-y: auto;
+}
+@keyframes rise { from { transform: translateY(26px); opacity: .4; } }
+.grabber { width: 38px; height: 4px; border-radius: 3px; background: var(--line-strong); margin: 4px auto 4px; flex: none; }
+.sheet h3 { font-size: 19px; letter-spacing: -.02em; }
+.sheet .stale-line { font-size: 14px; color: var(--ink-2); line-height: 1.45; }
+.compare { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; }
+.compare .side { background: var(--sunken); border-radius: 12px; padding: 11px; }
+.compare .side .cap { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-family: var(--mono); }
+.compare .side .val { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 3px; }
+.compare .side .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.compare .arrow { color: var(--muted); font-size: 18px; }
+.compare .side.now { background: var(--warn-wash); }
+.compare .side.now .val { color: var(--warn); }
+.delta-line { font-size: 13px; color: var(--ink-2); }
+.delta-line b { font-variant-numeric: tabular-nums; }
+.sheet-actions { display: flex; flex-direction: column; gap: 8px; }
+.sheet .why { font-size: 12px; color: var(--muted); text-align: center; }
+
+/* Управление стендом */
+.controls { display: flex; flex-direction: column; gap: 14px; }
+.chips { display: flex; gap: 7px; flex-wrap: wrap; }
+.chip {
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink-2);
+  padding: 8px 12px; border-radius: 100px; cursor: pointer; font: 500 13.5px/1 var(--sans);
+}
+.chip:hover { border-color: var(--line-strong); }
+.chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+
+.rail { display: flex; flex-direction: column; gap: 0; }
+.step { display: grid; grid-template-columns: 26px 1fr; gap: 13px; padding-bottom: 18px; position: relative; }
+.step:not(:last-child)::before {
+  content: ""; position: absolute; left: 12.5px; top: 26px; bottom: 0; width: 1px; background: var(--line);
+}
+.step .dot {
+  width: 26px; height: 26px; border-radius: 50%; background: var(--sunken); color: var(--ink-2);
+  display: grid; place-items: center; font: 500 12px/1 var(--mono); z-index: 1;
+}
+.step[data-active="true"] .dot { background: var(--red); color: #fff; }
+.step h4 { font-size: 15px; font-weight: 600; }
+.step p { font-size: 13.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.45; }
+
+.under { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.under .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; font-size: 13.5px; }
+.under .row2 span { color: var(--muted); }
+.under .row2 b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.under code {
+  font: 400 12.5px/1.5 var(--mono); background: var(--sunken);
+  padding: 2px 5px; border-radius: 5px; color: var(--ink-2);
+}
+
+/* ── Таблицы ─────────────────────────────────────────────── */
+.tablewrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--line); background: var(--paper); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 620px; }
+.tablewrap.compact table { min-width: 0; }
+th, td { text-align: left; padding: 12px 15px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th {
+  font: 500 11px/1.3 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); background: var(--sunken); white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td b { font-weight: 600; }
+.verdict-pick td { background: color-mix(in srgb, var(--gain-wash) 70%, transparent); }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.practice { display: flex; flex-direction: column; gap: 8px; }
+.practice a { font-size: 13px; color: var(--red); text-decoration: none; word-break: break-word; }
+.practice a:hover { text-decoration: underline; }
+.practice .maps { font-size: 13px; color: var(--muted); border-top: 1px dashed var(--line-strong); padding-top: 8px; margin-top: auto; }
+
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; font-weight: 500; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.status.done { color: var(--gain); } .status.done::before { background: var(--gain); }
+.status.mixed { color: var(--ink-2); } .status.mixed::before { background: var(--muted); }
+.status.open { color: var(--warn); } .status.open::before { background: var(--warn); }
+
+footer { margin-top: 64px; padding: 28px 0 54px; border-top: 1px solid var(--line); }
+footer .wrap { display: flex; gap: 26px; flex-wrap: wrap; justify-content: space-between; }
+
+@media (max-width: 1080px) {
+  .chart-card { grid-template-columns: 1fr; }
+  .chart-main { border-right: 0; border-bottom: 1px solid var(--line); }
+  .chart-side { border-radius: 0 0 var(--radius) var(--radius); }
+  .journey { grid-template-columns: 1fr; justify-items: center; }
+  .hero-grid { grid-template-columns: 1fr; align-items: start; }
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .grid3, .grid2 { grid-template-columns: 1fr; }
+  .topnav { display: none; }
+}
+@media (max-width: 420px) {
+  .phone { width: 100%; height: 700px; }
+  .kpis { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">А</span>
+      Сигнальный слой <small>· демо-стенд</small>
+    </div>
+    <nav class="topnav">
+      <a href="#signal">Сигнал</a>
+      <a href="#journey">Клиентский путь</a>
+      <a href="#mechanic">Механика</a>
+      <a href="#texts">Тексты</a>
+      <a href="#req">Требования</a>
+    </nav>
+    <button class="iconbtn" id="theme" type="button" title="Светлая / тёмная тема" aria-label="Переключить тему">◐</button>
+  </div>
+</header>
+
+<main>
+
+<!-- ══ Титул ══════════════════════════════════════════════ -->
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <span class="eyebrow">Трансграничные переводы · RUB → СНГ</span>
+        <h1>Когда есть повод написать клиенту&nbsp;— и что он увидит, если момент изменился</h1>
+        <p class="lede">Сквозной сценарий на реальных данных: слой находит день, пуш несёт проверяемый факт, экран перевода открывается предзаполненным. Если между отправкой и открытием курс ушёл, клиент видит это первым, а не в чеке.</p>
+      </div>
+      <div class="card pad" style="font-size:14px;color:var(--ink-2);display:flex;flex-direction:column;gap:10px">
+        <span class="eyebrow">Что на стенде живое</span>
+        <p>График, отметки срабатываний, тексты пушей и цифры на экране перевода посчитаны реальным слоем из <code style="font:400 12.5px var(--mono)">signal_layer.signals</code> по официальным курсам ЦБ РФ и выгружены скриптом <code style="font:400 12.5px var(--mono)">demo/export_data.py</code>.</p>
+        <p>Не живое: интерфейс — прототип по публичному приложению, получатель синтетический, курс ЦБ показан без спреда и комиссии.</p>
+      </div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi accent"><b>+81,7 б.п.</b><span>выгода клиенту на перевод против случайного дня того же бюджета</span></div>
+      <div class="kpi"><b>1,11</b><span>пуша в неделю на коридор — внутри полосы 1–2</span></div>
+      <div class="kpi"><b>5 из 5</b><span>коридоров значимы после поправки на множественность</span></div>
+      <div class="kpi"><b>4 из 4</b><span>проверки as-of совпали: заглядывания вперёд нет</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 1. Сигнал ══════════════════════════════════════════ -->
+<section id="signal">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="row">
+        <span class="eyebrow">01 · Основная задача</span>
+        <span class="tag">walk-forward · без заглядывания вперёд</span>
+      </div>
+      <h2>График курса с отметками срабатываний</h2>
+      <p class="lede">Каждая точка — день, который коммуникационная политика реально выбрала под пуш. Пунктир — скользящий тренд EWMA с окном, которое слой выбрал сам: сигнал возникает, когда курс уходит ниже собственного тренда, и только если этот факт можно правдиво произнести.</p>
+    </div>
+
+    <div class="card chart-card">
+      <div class="chart-main">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+          <div class="tabs" id="tabs" role="tablist" aria-label="Коридор"></div>
+          <span class="small" id="chartMeta" style="margin-left:auto"></span>
+        </div>
+        <svg class="chart" id="chart" viewBox="0 0 900 330" role="img" aria-label="Курс коридора с отметками срабатываний сигнала"></svg>
+        <div class="legend small">
+          <span><i style="background:var(--ink-2)"></i>курс ЦБ, ₽ за единицу</span>
+          <span><i style="background:var(--muted);height:0;border-top:2px dashed var(--muted)"></i>тренд EWMA(10)</span>
+          <span><i style="background:var(--red);height:8px;width:8px;border-radius:50%"></i>сигнал → пуш</span>
+          <span>↓ ниже — выгоднее отправителю</span>
+        </div>
+      </div>
+      <aside class="chart-side" id="sigCard"></aside>
+    </div>
+
+    <div class="grid2" style="margin-top:16px">
+      <div class="card pad">
+        <span class="eyebrow">Дисквалифицирующее условие ТЗ</span>
+        <h3 style="margin:8px 0 6px">Сигналы, пересчитанные с физически удалённым будущим</h3>
+        <p class="small" style="margin-bottom:13px"><code style="font:400 12.5px var(--mono)">signals_asof(panel, ["TJS"], T)</code> обрезает панель по дату T и считает заново. Ниже — совпадение с историческим прогоном: набор дат сигналов идентичен, и сам день T слой выбирает тем же.</p>
+        <div class="audit" id="audit"></div>
+      </div>
+      <div class="card pad">
+        <span class="eyebrow">Устойчивость</span>
+        <h3 style="margin:8px 0 10px">Где выигрыш держится, а где нет</h3>
+        <div class="tablewrap" style="border:0;box-shadow:none">
+          <table style="min-width:0">
+            <tbody>
+              <tr><td>Коридоры в плюсе</td><td class="num"><b>5 из 5</b></td><td class="small">TJS +87, UZS +82, KGS +83, AMD +82, KZT +75 б.п.</td></tr>
+              <tr><td>Окна out-of-time</td><td class="num"><b>10 из 10</b></td><td class="small">полугодия 2021-09 … 2026-08, от +41 до +159 б.п.</td></tr>
+              <tr><td>Нижняя граница CI</td><td class="num"><b>+70,5</b></td><td class="small">moving-block bootstrap</td></tr>
+              <tr><td>p против случайного расписания</td><td class="num"><b>0,002</b></td><td class="small">500 расписаний того же размера</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 2. Клиентский путь ═════════════════════════════════ -->
+<section id="journey">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="row">
+        <span class="eyebrow">02 · Задача со звёздочкой</span>
+        <span class="tag red">интерактивно</span>
+      </div>
+      <h2>Пуш → экран перевода → момент изменился</h2>
+      <p class="lede">Разрыв между отправкой и открытием — от минут до суток. Переключите, когда клиент открыл уведомление: экран пересобирается по реальным котировкам тех дней.</p>
+    </div>
+
+    <div class="journey">
+      <div class="stage">
+        <div class="phone">
+          <div class="notch" aria-hidden="true"></div>
+          <div class="screen" id="screen"></div>
+        </div>
+        <div class="chips" id="scenarioChips" role="group" aria-label="Когда клиент открыл пуш"></div>
+        <p class="small" style="text-align:center;max-width:360px" id="scenarioNote"></p>
+      </div>
+
+      <div class="controls">
+        <div class="rail" id="rail"></div>
+
+        <div class="under">
+          <span class="eyebrow">Что вернул слой на дату сигнала</span>
+          <div class="row2" id="layerOut" style="margin-top:10px"></div>
+          <p class="small" style="margin-top:12px">Пуш уходит только с фактом, который на момент отправки истинный: день, где утверждение не выполняется, не получает слот. Это правило комплаенса дало и основной прирост денег — <b>с 30,5 до 81,7 б.п.</b> на перевод.</p>
+        </div>
+
+        <div class="under">
+          <span class="eyebrow">Правило раскрытия</span>
+          <h3 style="margin:8px 0 8px">Насколько громко сообщать, что данные устарели</h3>
+          <p class="small">Порог — медианное дневное движение самого коридора (TJS: <b>53 б.п.</b>). Изменение меньше обычного дня — это шум, ради него не стоит прерывать путь. Раскрытие асимметрично, как и цена ошибки в ТЗ: против клиента — модальное окно с подтверждением, в пользу клиента — спокойная плашка.</p>
+          <div class="tablewrap" style="margin-top:12px;border:0;box-shadow:none">
+            <table style="min-width:0">
+              <tbody>
+                <tr><td>Курс не изменился</td><td class="small">зелёная плашка «данные актуальны на дд.мм.гггг»</td></tr>
+                <tr><td>Ушёл в пользу клиента</td><td class="small">плашка: сумма к получению выросла, путь не прерываем</td></tr>
+                <tr><td>Против клиента, ≤ 53 б.п.</td><td class="small">серая плашка со снимком данных пуша, форма уже пересчитана</td></tr>
+                <tr><td><b>Против клиента, &gt; 53 б.п.</b></td><td class="small"><b>модальное окно</b>: было/стало и явное подтверждение</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="under">
+          <span class="eyebrow">Время отправки</span>
+          <h3 style="margin:8px 0 8px">09:30 по местному времени клиента, пять волн</h3>
+          <p class="small">Дневной ряд ЦБ даёт одну коммуникацию в день, поэтому час выбирается не рынком, а клиентом: утро буднего дня, когда перевод уместен, а не 01:00 по местному. Территория банка — от Калининграда до Камчатки, поэтому отправка идёт волнами по часовым поясам, а не одним залпом по Москве. В бэктесте мы дополнительно закладываем суточный лаг публикации (<code>available_on = дата котировки + 1 день</code>) — консервативнее, чем реальная публикация ЦБ накануне, так что измеренная выгода не завышена скоростью доступа к данным.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 3. Механика ════════════════════════════════════════ -->
+<section id="mechanic">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">03 · Обоснование</span>
+      <h2>Почему модальное окно, а не тихая подмена курса</h2>
+      <p class="lede">Критерии сравнения заданы самим кейсом: асимметрия цены ошибки, доверие к дефицитному каналу, встраиваемость в текущий путь, реализуемость без казначейства и рамка «только факты».</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:20%">Механика</th>
+            <th style="width:24%">Что видит клиент</th>
+            <th style="width:26%">Чем хороша</th>
+            <th style="width:22%">Чем платим</th>
+            <th style="width:8%">Вердикт</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>A. Тихое обновление</b></td>
+            <td>Актуальный курс без упоминания уведомления</td>
+            <td>Ничего не стоит, не прерывает путь</td>
+            <td>Клиент помнит цифру из пуша: расхождение он находит сам и объясняет себе худшим образом. Хуже всего ведёт себя ровно в плохом сценарии</td>
+            <td><span class="status open">отклонено</span></td>
+          </tr>
+          <tr>
+            <td><b>B. Фиксация курса на N минут</b></td>
+            <td>«Курс зафиксирован, осталось 14:32»</td>
+            <td>Лучший клиентский опыт: разрыв закрыт целиком, а не объяснён</td>
+            <td>Банк принимает рыночный риск и закладывает его в спред — это ценообразование и казначейство, прямо вынесенные из скоупа кейса</td>
+            <td><span class="status mixed">цель шага 2</span></td>
+          </tr>
+          <tr class="verdict-pick">
+            <td><b>C. Раскрытие, пропорциональное изменению</b></td>
+            <td>Плашка при малом расхождении, модальное окно с было/стало при существенном</td>
+            <td>Честно в плохом сценарии, сохраняет доверие к каналу, встраивается поверх текущего экрана, не требует интеграций</td>
+            <td>Нужно хранить снимок данных пуша и порог на коридор</td>
+            <td><span class="status done">выбрано</span></td>
+          </tr>
+          <tr>
+            <td><b>D. Отзыв сигнала</b></td>
+            <td>«Сигнал больше не актуален», перевод — обычным путём</td>
+            <td>Защищает от разочарования, сигнальный слой не подписывается под чужим курсом</td>
+            <td>Патернализм: клиент пришёл переводить, а не читать про сигнал. Ломает основной путь ради чистоты сигнала</td>
+            <td><span class="status open">отклонено</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin:30px 0 14px">Обзор практик: как это решают там, где цена меняется между показом и покупкой</h3>
+    <div class="grid2">
+      <div class="card pad practice">
+        <span class="tag">фиксация · денежные переводы</span>
+        <h4>Wise · guaranteed rate</h4>
+        <p class="small">Курс фиксируется на явно названный срок, и срок клиенту сообщают в момент оформления, а не постфактум. Это механика B в чистом виде: разрыв закрывают деньгами банка.</p>
+        <a href="https://wise.com/help/articles/2448203/whats-a-guaranteed-rate" target="_blank" rel="noopener">wise.com/help/articles/2448203</a>
+        <p class="maps">Взяли: обещание с явным сроком годности. Не взяли: сам риск — вне скоупа.</p>
+      </div>
+      <div class="card pad practice">
+        <span class="tag">предупреждение · денежные переводы</span>
+        <h4>Wise · live rate transfers</h4>
+        <p class="small">Когда курс не фиксируется, продукт прямо предупреждает: сумма будет пересчитана по курсу на момент конвертации. Ожидание задаётся до, а не после.</p>
+        <a href="https://wise.com/help/articles/2978018/how-do-live-rate-transfers-work" target="_blank" rel="noopener">wise.com/help/articles/2978018</a>
+        <p class="maps">Взяли: снимок данных с датой прямо на экране — клиент знает, к чему относится цифра.</p>
+      </div>
+      <div class="card pad practice">
+        <span class="tag">re-quote · валютный обмен</span>
+        <h4>Coinbase Prime · RFQ</h4>
+        <p class="small">Котировка живёт 3 секунды и обновляется по запросу до 20 раз. Истекла — клиент получает новую и подтверждает её заново; молча исполнить по другой цене нельзя.</p>
+        <a href="https://help.coinbase.com/en/prime/trading-and-funding/rfq" target="_blank" rel="noopener">help.coinbase.com/en/prime/…/rfq</a>
+        <p class="maps">Взяли: явное переподтверждение вместо тихой подмены. Это ядро выбранной механики C.</p>
+      </div>
+      <div class="card pad practice">
+        <span class="tag">право передумать · авиация</span>
+        <h4>US DOT · 24-hour reservation requirement</h4>
+        <p class="small">Регулятор требует от перевозчиков либо держать бронь сутки бесплатно, либо давать сутки на отмену с полным возвратом. Решение под давлением цены считается решением, принятым не до конца.</p>
+        <a href="https://www.transportation.gov/airconsumer/notice-24hour-reservation" target="_blank" rel="noopener">transportation.gov/airconsumer/notice-24hour-reservation</a>
+        <p class="maps">Взяли: «Не сейчас» — равноправная кнопка, а не серая ссылка внизу.</p>
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top:16px">
+      <div class="card pad">
+        <span class="eyebrow">Реализуемость</span>
+        <h3 style="margin:8px 0 8px">Что придётся добавить в приложение</h3>
+        <ul class="small" style="margin-top:4px">
+          <li>Снимок данных пуша в его payload: дата и время котировки, курс, текст факта, коридор.</li>
+          <li>Одна проверка при открытии экрана из уведомления: сравнить снимок с текущей котировкой.</li>
+          <li>Одна шторка и одна плашка — существующие компоненты дизайн-системы.</li>
+          <li>Порог раскрытия на коридор — конфиг, а не код: пересчитывается тем же скриптом, что и сигналы.</li>
+        </ul>
+        <p class="small" style="margin-top:10px">Экран перевода не переверстывается: механика живёт поверх него и включается только при входе из пуша.</p>
+      </div>
+      <div class="card pad">
+        <span class="eyebrow">Предзаполнение формы</span>
+        <h3 style="margin:8px 0 8px">Когда уместно, а когда мешает</h3>
+        <p class="small">Предзаполняем, когда у клиента есть устойчивый шаблон: повторяющийся получатель в этом коридоре и сумма, близкая к его же медиане за последние переводы. Данные для этого у банка уже есть — транзакционная история переводов, без каких-либо новых источников.</p>
+        <ul class="small" style="margin-top:8px">
+          <li><b>Получатель</b> — если в коридоре один активный получатель за 6 месяцев, подставляем; если несколько — открываем список с последним сверху.</li>
+          <li><b>Сумма</b> — медиана последних переводов этому получателю, округлённая вниз до тысячи; поле остаётся редактируемым и подсвечено как черновик.</li>
+          <li><b>Не предзаполняем</b> — первый перевод в коридор, смена реквизитов получателя, сумма вне обычного диапазона: цена ошибки выше выигрыша в два тапа.</li>
+        </ul>
+        <p class="small" style="margin-top:10px">Подтверждение перевода — всегда явный шаг клиента. Предзаполнение экономит ввод, а не согласие.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 4. Тексты ══════════════════════════════════════════ -->
+<section id="texts">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">04 · Комплаенс</span>
+      <h2>Библиотека текстов: сценарий → формулировка</h2>
+      <p class="lede">Рамка одна: говорим о настоящем и прошлом, вывод о будущем клиент делает сам. Каждая формулировка привязана к проверке, которая выполняется до отправки — если факт не выполняется, сообщение не формируется вовсе.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:19%">Сценарий</th>
+            <th style="width:16%">Направление</th>
+            <th style="width:34%">Формулировка пуша</th>
+            <th style="width:31%">Что проверяется в момент отправки</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Ниже своего тренда</b><br><span class="small">то, что отправляется сейчас</span></td>
+            <td>курс вниз</td>
+            <td>«Курс сомони сейчас на 1,7 % ниже своего среднего за последние 10 наблюдений»</td>
+            <td><code>deviation_pct &lt; 0</code> на выбранном окне — иначе день не получает слот</td>
+          </tr>
+          <tr>
+            <td><b>Моментум</b></td>
+            <td>курс вниз</td>
+            <td>«Курс сомони снижается четвёртый день подряд»</td>
+            <td>серия снижений по опубликованным котировкам; дни без публикации не считаются движением</td>
+          </tr>
+          <tr>
+            <td><b>Уровень</b></td>
+            <td>курс внизу диапазона</td>
+            <td>«Сейчас курс выгоднее, чем в 85 % дней за последние три месяца»</td>
+            <td>перцентиль по прошлому окну, сегодняшний день из выборки исключён</td>
+          </tr>
+          <tr>
+            <td><b>Недельное изменение</b></td>
+            <td>рубль укрепился</td>
+            <td>«За неделю рубль укрепился к сому на 2,1 %»</td>
+            <td>две опубликованные котировки, арифметика воспроизводима клиентом</td>
+          </tr>
+          <tr>
+            <td><b>Сезонность</b></td>
+            <td>календарный профиль</td>
+            <td>«Перед Новым годом курс обычно растёт — многие переводят заранее»</td>
+            <td>статистика прошлых лет; глагол в прошедшем обыкновении, не в будущем</td>
+          </tr>
+          <tr>
+            <td><b>Окно закрывается</b></td>
+            <td>отскок вверх</td>
+            <td>«Курс драма вырос на 1,2 % от минимума прошлой недели»</td>
+            <td>факт роста от rolling-минимума; отправляется, только если рост уже состоялся</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid2" style="margin-top:16px">
+      <div class="tablewrap compact">
+        <table>
+          <thead><tr><th style="width:44%">Так нельзя</th><th>Почему</th></tr></thead>
+          <tbody>
+            <tr><td><b>«Курс скоро вырастет»</b></td><td class="small">Утверждение о будущем, которого мы не знаем. Читается как прогноз банка и переносит на нас ответственность за исход</td></tr>
+            <tr><td><b>«Успейте, пока не подорожало»</b></td><td class="small">То же обещание плюс искусственная срочность: давит на решение, которое клиент должен принять сам</td></tr>
+            <tr><td><b>«Гарантируем лучший курс»</b></td><td class="small">Обещание, которое банк не исполняет: курс ЦБ — не курс исполнения, а лучшего курса на рынке мы не знаем</td></tr>
+            <tr><td><b>«Заработайте на курсе»</b></td><td class="small">Превращает перевод семье в инвестицию — прямая дорога к индивидуальной инвестиционной рекомендации</td></tr>
+            <tr><td><b>«Рекомендуем перевести сегодня»</b></td><td class="small">Персональный совет о сделке. Слой сообщает факт, решение остаётся за клиентом</td></tr>
+            <tr><td><b>«Сегодня лучший курс за месяц»</b> без расчёта</td><td class="small">Проверяемое утверждение, которое легко оказывается ложным. Допустимо только когда посчитано и истинно на момент отправки</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card pad">
+        <span class="eyebrow">Почему разрешённые работают</span>
+        <h3 style="margin:8px 0 8px">Запрещённые формулировки несут тот же смысл</h3>
+        <p class="small">«Курс сомони снижается четвёртый день подряд» и «Успейте, пока не подорожало» приводят клиента к одному и тому же действию. Разница в том, кто делает вывод: в первом случае клиент, во втором — банк, который в этот момент выдаёт прогноз и берёт на себя обязательство.</p>
+        <h3 style="margin:16px 0 8px">Правило вшито в код, а не в чек-лист</h3>
+        <p class="small">Проверка факта стоит перед политикой отправки: день, где утверждение ложно, получает запрещающий счёт и не тратит слот — слот достаётся следующему пригодному дню. Побочный эффект оказался главным: дни, которые эта проверка отвергает, стоят клиенту в среднем <b>−70 б.п.</b> и отрицательны на всех пяти коридорах.</p>
+        <p class="small" style="margin-top:12px">Слой отдаёт шаблон с ISO-кодом (<code>Курс TJS сейчас на …</code>); клиентское название валюты подставляет витрина сообщений — на стенде это видно рядом, в панели «что вернул слой».</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 5. Требования ══════════════════════════════════════ -->
+<section id="req">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">05 · Соответствие ТЗ</span>
+      <h2>Требования кейса и чем они закрыты</h2>
+      <p class="lede">Три статуса, а не два. Там, где обязательное условие не выполнено, стоит измеренная причина — на защите это сильнее зелёной галочки, которую нечем подтвердить.</p>
+    </div>
+
+    <h3 style="margin:0 0 12px">Основная задача: сигнальный слой</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:22%">Требование</th><th style="width:40%">Чем закрыто</th><th style="width:26%">Доказательство</th><th style="width:12%">Статус</th></tr></thead>
+        <tbody>
+          <tr><td><b>1. Данные</b></td><td>Пять коридоров + USD/EUR/CNY для контекста, дневной ряд ЦБ РФ с 2000 года. Номиналы нормированы в <code>rub_per_unit</code>, переносы значений в выходные не считаются движением, публикация с суточным лагом</td><td class="small">41 877 наблюдений, <code>data/normalization.py</code></td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>2. Базовые индикаторы</b></td><td>Уровень, моментум, просадка, сезонность, разворот от минимума плюс собственный z-score отклонения от EWMA</td><td class="small"><code>rules.py</code>, <code>indicators.py</code></td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>3. Обучаемые индикаторы</b></td><td>Три walk-forward головы на признаках индикаторов: P(локальный минимум ±h), ожидаемая выгода, P(плохого пуша); порог с асимметричной ценой ошибки λ</td><td class="small"><code>utility_risk.py</code>: 14,0 б.п. — проигрывает статистическому правилу, плюс лишь на 2 коридорах из 5</td><td><span class="status mixed">выполнено, вывод отрицательный</span></td></tr>
+          <tr><td><b>4. Метрика правдивости</b></td><td>Два правила раздельно: «выгодно сейчас» — курс не хуже h дней; «окно закрывается» — курс действительно вырос</td><td class="small">Таблица по h = 1/3/5/10/20; правила противоречат друг другу — показано численно</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>5. Бэктест</b></td><td>Бенчмарк CBSB-1: одинаковый бюджет пушей всем стратегиям, 10 out-of-time окон, matched random, block bootstrap, поправка Benjamini–Hochberg. Частота, кучность и точность считаются в одном прогоне</td><td class="small"><code>reports/benchmark/scorecard.md</code>, воспроизводится одной командой</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>6. Быстрые и медленные</b></td><td>Скорость индикатора = длина окна (fast/medium/slow), цена ожидания считается между быстрым сигналом и ближайшим подтверждением медленного</td><td class="small"><code>indicators.waiting_cost()</code>; на этом отрезке слой выбрал быстрое окно span=10</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>7. Комбинирование</b></td><td>Единый поток триггеров: счёт → порог по скользящему квантилю собственной истории → ≤ 2 в неделю, кулдаун 1 наблюдение. Ранговая смесь индикаторов измерена как альтернатива (24,5 б.п.) и не взята</td><td class="small">Темп 1,11 пуша в неделю на коридор</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>8. Тексты</b></td><td>Библиотека сценарий → формулировка, список запрещённых с обоснованием, техническое вето на неправдивый факт</td><td class="small">Раздел 04 этого стенда</td><td><span class="status done">выполнено</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin:28px 0 12px">Обязательные условия работоспособности</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:22%">Условие</th><th style="width:18%">Порог</th><th style="width:16%">Факт</th><th style="width:32%">Комментарий</th><th style="width:12%">Статус</th></tr></thead>
+        <tbody>
+          <tr><td><b>Выгода момента</b></td><td class="small">значимо &gt; 0</td><td class="num"><b>+81,7 б.п.</b><br><span class="small">CI низ +70,5</span></td><td class="small">≈ 817 ₽ на переводе в 100 000 ₽ против случайного дня того же бюджета</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>Частота</b></td><td class="small">1–2 в неделю</td><td class="num"><b>1,11</b></td><td class="small">Внутри полосы на всех пяти коридорах</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>Устойчивость</b></td><td class="small">на коридорах и окнах</td><td class="num"><b>5/5 · 10/10</b></td><td class="small">Все коридоры значимы после поправки, все полугодия в плюсе</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>Нет заглядывания вперёд</b></td><td class="small">дисквалифицирующее</td><td class="num"><b>4/4</b></td><td class="small">Пересчёт на обрезанной панели совпал с прогоном; параметры выбираются walk-forward</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>Цена ожидания</b></td><td class="small">опционально</td><td class="num">измерена</td><td class="small">Быстрое окно выигрывает на этих коридорах: ожидание подтверждения съедает выгоду дня</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>Точность (hit rate)</b></td><td class="small">по h = 1…20</td><td class="num">0,51 → 0,14</td><td class="small">Посчитана по обоим правилам ТЗ и по всем горизонтам</td><td><span class="status done">выполнено</span></td></tr>
+          <tr><td><b>Lift над случайным днём</b></td><td class="small">≥ 1,3</td><td class="num"><b>0,97</b></td><td class="small">Правило «курс останется не хуже» засчитывает дни, когда курс продолжал падать — то есть когда клиенту стоило подождать: с деньгами клиента оно связано отрицательно (−0,39). По деньгам сигнал бьёт случайный день на 81,7 б.п. Предлагаем считать lift по правилу «окно закрывается»</td><td><span class="status open">не выполнено, измерено</span></td></tr>
+          <tr><td><b>Кучность</b></td><td class="small">CV ≤ 1, пауза ≤ 75 дней</td><td class="num"><b>1,36 · 90 дн</b></td><td class="small">Молчание в основном рыночное: между пригодными днями рынок сам даёт паузы 49–73 дня. Все правдивые факты, доступные в дни молчания, проверены — каждый стоит клиенту денег (−21…−82 б.п.)</td><td><span class="status open">не выполнено, измерено</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin:28px 0 12px">Задача со звёздочкой: четыре качественных критерия</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:24%">Критерий</th><th style="width:52%">Чем закрыт</th><th style="width:24%">Где на стенде</th></tr></thead>
+        <tbody>
+          <tr><td><b>Реальный клиентский путь</b></td><td>Прототип повторяет структуру перевода за рубеж в «Альфа-Мобайл»: вход из уведомления, экран с получателем и суммой, шторка поверх экрана, подтверждение отдельным шагом</td><td class="small">Раздел 02</td></tr>
+          <tr><td><b>Обоснованный выбор механики</b></td><td>Четыре механики против пяти критериев, у каждой названа цена; выбранная описана вместе с порогом раскрытия и его происхождением</td><td class="small">Раздел 03</td></tr>
+          <tr><td><b>Обзор практик со ссылками</b></td><td>Четыре разобранных продукта и регуляторное требование, для каждого указано, что взяли и что не взяли</td><td class="small">Раздел 03</td></tr>
+          <tr><td><b>Реализуемость</b></td><td>Снимок данных в payload пуша, одна проверка при открытии, шторка и плашка из существующей дизайн-системы; экран перевода не переверстывается</td><td class="small">Раздел 03</td></tr>
+          <tr><td><b>Предзаполнение формы</b></td><td>Правила «когда уместно», источники данных (транзакционная история), явные развилки и случаи, когда предзаполнять не нужно</td><td class="small">Раздел 03</td></tr>
+          <tr><td><b>Время отправки</b></td><td>09:30 по местному времени клиента, волны по часовым поясам, привязка к частоте ряда и лагу публикации</td><td class="small">Раздел 02</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="small" style="max-width:60ch">Демо-стенд команды для хакатонного кейса. Интерфейс — прототип, воспроизводящий структуру публичного приложения, а не его копия; фирменные цвета использованы для оценки решения в среде заказчика. Получатель и суммы синтетические, персональных и внутренних данных банка в решении нет.</p>
+    <p class="small" style="max-width:38ch">Курс ЦБ РФ — не курс исполнения: клиент переводит по курсу приложения со своей динамикой. Сигнал строится по публичному ряду, спред и комиссия в расчёт не входят.</p>
+  </div>
+</footer>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var D = window.DEMO_DATA;
+  var MONTHS = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
+  var ORDER = ["TJS", "UZS", "KGS", "AMD", "KZT"];
+
+  /* ── Форматирование ─────────────────────────────────── */
+  function fmt(x, digits) {
+    return x.toLocaleString("ru-RU", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+  function ru(dateStr) {
+    var p = dateStr.split("-");
+    return p[2] + "." + p[1] + "." + p[0];
+  }
+  function ruLong(dateStr) {
+    var p = dateStr.split("-");
+    return Number(p[2]) + " " + MONTHS[Number(p[1]) - 1] + " " + p[0];
+  }
+  function pct(bps) { return fmt(Math.abs(bps) / 100, 2) + " %"; }
+  var DAYS = ["воскресенье","понедельник","вторник","среда","четверг","пятница","суббота"];
+  function weekday(dateStr) {
+    var p = dateStr.split("-");
+    return DAYS[new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).getUTCDay()];
+  }
+  function rateDigits(iso) { return iso === "UZS" ? 6 : 4; }
+
+  /* ── График ─────────────────────────────────────────── */
+  var current = "TJS";
+  var picked = {};
+
+  function drawChart(iso) {
+    var c = D.corridors[iso];
+    var pts = c.series;
+    var W = 900, H = 330, L = 62, R = 16, T = 16, B = 30;
+    var lo = Infinity, hi = -Infinity;
+    pts.forEach(function (p) {
+      lo = Math.min(lo, p.r, p.e); hi = Math.max(hi, p.r, p.e);
+    });
+    var padY = (hi - lo) * 0.12;
+    lo -= padY; hi += padY;
+    var x = function (i) { return L + i * (W - L - R) / (pts.length - 1); };
+    var y = function (v) { return T + (hi - v) * (H - T - B) / (hi - lo); };
+    var idx = {};
+    pts.forEach(function (p, i) { idx[p.d] = i; });
+
+    var svg = [];
+    // Горизонтальная сетка и подписи оси значений
+    for (var t = 0; t <= 4; t++) {
+      var v = lo + (hi - lo) * t / 4, yy = y(v);
+      svg.push('<line x1="' + L + '" y1="' + yy.toFixed(1) + '" x2="' + (W - R) + '" y2="' + yy.toFixed(1) + '" style="stroke:var(--line)" stroke-width="1"/>');
+      svg.push('<text x="' + (L - 10) + '" y="' + (yy + 4).toFixed(1) + '" text-anchor="end" style="font-family:var(--mono);font-size:11px;fill:var(--muted)">' + fmt(v, rateDigits(iso)) + '</text>');
+    }
+    // Подписи месяцев
+    var lastMonth = null;
+    pts.forEach(function (p, i) {
+      var m = p.d.slice(0, 7);
+      if (m !== lastMonth && i > 2 && i < pts.length - 3) {
+        lastMonth = m;
+        svg.push('<text x="' + x(i).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" style="font-family:var(--mono);font-size:11px;fill:var(--muted)">' + MONTHS[Number(p.d.slice(5, 7)) - 1] + '</text>');
+      } else if (m !== lastMonth) { lastMonth = m; }
+    });
+
+    // Заливка под курсом, линия курса, тренд EWMA
+    var line = pts.map(function (p, i) { return (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.r).toFixed(1); }).join(" ");
+    var trend = pts.map(function (p, i) { return (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.e).toFixed(1); }).join(" ");
+    svg.push('<defs><linearGradient id="fillGrad" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0%" style="stop-color:var(--ink-2);stop-opacity:.14"/>' +
+      '<stop offset="100%" style="stop-color:var(--ink-2);stop-opacity:0"/></linearGradient></defs>');
+    svg.push('<path d="' + line + ' L' + x(pts.length - 1).toFixed(1) + ' ' + (H - B) + ' L' + L + ' ' + (H - B) + ' Z" style="fill:url(#fillGrad)"/>');
+    svg.push('<path d="' + trend + '" style="fill:none;stroke:var(--muted);stroke-width:1.4;stroke-dasharray:4 4;opacity:.9"/>');
+    svg.push('<path d="' + line + '" style="fill:none;stroke:var(--ink-2);stroke-width:1.8;stroke-linejoin:round"/>');
+
+    // Отметки срабатываний
+    var sel = picked[iso] || c.signals[c.signals.length - 1].date;
+    c.signals.forEach(function (s) {
+      var i = idx[s.date];
+      if (i === undefined) return;
+      var isSel = s.date === sel;
+      svg.push('<g class="mk" data-date="' + s.date + '" style="cursor:pointer">');
+      if (isSel) {
+        svg.push('<line x1="' + x(i).toFixed(1) + '" y1="' + T + '" x2="' + x(i).toFixed(1) + '" y2="' + (H - B) + '" style="stroke:var(--red);stroke-width:1;opacity:.35"/>');
+      }
+      svg.push('<circle cx="' + x(i).toFixed(1) + '" cy="' + y(s.rate).toFixed(1) + '" r="' + (isSel ? 6.5 : 3.6) + '" style="fill:var(--red);stroke:var(--paper);stroke-width:' + (isSel ? 2.5 : 1.4) + '"><title>' + ru(s.date) + " · " + fmt(s.rate, rateDigits(iso)) + ' ₽</title></circle>');
+      svg.push('<circle cx="' + x(i).toFixed(1) + '" cy="' + y(s.rate).toFixed(1) + '" r="11" style="fill:transparent"/>');
+      svg.push("</g>");
+    });
+
+    document.getElementById("chart").innerHTML = svg.join("");
+    Array.prototype.forEach.call(document.querySelectorAll("#chart .mk"), function (g) {
+      g.addEventListener("click", function () {
+        picked[iso] = g.getAttribute("data-date");
+        drawChart(iso);
+        drawSignalCard(iso);
+      });
+    });
+
+    document.getElementById("chartMeta").textContent =
+      c.signals.length + " срабатываний · " + c.stats.per_week + " в неделю · " +
+      ruLong(pts[0].d) + " — " + ruLong(pts[pts.length - 1].d);
+  }
+
+  function drawSignalCard(iso) {
+    var c = D.corridors[iso];
+    var date = picked[iso] || c.signals[c.signals.length - 1].date;
+    var s = c.signals.filter(function (v) { return v.date === date; })[0];
+    var f = s.follow.length ? s.follow[0] : null;
+    var moved = f
+      ? (f.bps > 0
+        ? "курс вырос на " + pct(f.bps) + " — окно закрылось"
+        : "курс опустился ещё на " + pct(f.bps))
+      : "следующей котировки нет";
+
+    document.getElementById("sigCard").innerHTML =
+      '<span class="eyebrow">Срабатывание</span>' +
+      '<h3 style="margin:8px 0 3px">' + ruLong(s.date) + "</h3>" +
+      '<p class="small" style="margin-bottom:14px">Кликните любую точку на графике</p>' +
+      '<div class="fact" style="margin-bottom:14px">' + s.message + "</div>" +
+      '<dl class="kv">' +
+      "<dt>Индикатор</dt><dd>zscore_tuned</dd>" +
+      "<dt>Окно</dt><dd>" + s.window.replace("span=", "") + " набл. · " + (s.speed === "fast" ? "быстрое" : s.speed === "medium" ? "среднее" : "медленное") + "</dd>" +
+      "<dt>Ниже тренда</dt><dd>" + fmt(Math.abs(s.deviation_pct), 2) + " %</dd>" +
+      "<dt>Сила сигнала</dt><dd>" + (s.strength_pct === null ? "—" : fmt(s.strength_pct * 100, 0) + "-й перц.") + "</dd>" +
+      "<dt>Сценарий</dt><dd>favourable_now</dd>" +
+      "<dt>Курс ЦБ</dt><dd>" + fmt(s.rate, rateDigits(iso)) + " ₽</dd>" +
+      "<dt>Проверка факта</dt><dd style='color:var(--gain)'>пройдена</dd>" +
+      "</dl>" +
+      '<p class="small" style="margin-top:14px;border-top:1px solid var(--line-strong);padding-top:12px">' +
+      "<b>Что было дальше.</b> К следующей котировке " + moved +
+      (s.fwd10_bps === null ? "" : "; в среднем за 10 наблюдений вперёд курс был " +
+        (s.fwd10_bps > 0 ? "на " + pct(s.fwd10_bps) + " выше" : "на " + pct(s.fwd10_bps) + " ниже") + " этого дня") + ".</p>";
+  }
+
+  // Вкладки коридоров
+  var tabs = document.getElementById("tabs");
+  ORDER.forEach(function (iso) {
+    var c = D.corridors[iso];
+    var b = document.createElement("button");
+    b.className = "tab";
+    b.type = "button";
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(iso === current));
+    b.textContent = "RUB → " + iso;
+    b.title = c.country;
+    b.addEventListener("click", function () {
+      current = iso;
+      Array.prototype.forEach.call(tabs.children, function (el) {
+        el.setAttribute("aria-selected", String(el === b));
+      });
+      drawChart(iso);
+      drawSignalCard(iso);
+    });
+    tabs.appendChild(b);
+  });
+
+  // Аудит as-of
+  document.getElementById("audit").innerHTML = D.asof_audit.map(function (a) {
+    return '<span class="audit-chip">as-of ' + ru(a.asof) + " · " + a.n + " сигналов · " + (a.identical ? "совпало" : "расхождение") + "</span>";
+  }).join("");
+
+  /* ── Клиентский путь ────────────────────────────────── */
+  var SCENARIOS = [
+    { id: "fresh", label: "Открыл через 20 минут", when: "через 20 минут после отправки", signal: "2026-06-10", open: "2026-06-10", time: "09:52",
+      note: "Котировка ЦБ дневная, поэтому внутри дня ориентир не менялся: факт из пуша всё ещё истинный." },
+    { id: "next", label: "На следующий день", when: "вечером следующего дня", signal: "2026-06-10", open: "2026-06-11", time: "19:14",
+      note: "Расхождение меньше обычного дневного движения коридора — прерывать путь ради шума не нужно, но снимок данных клиент видит." },
+    { id: "late", label: "Спустя несколько дней", when: "спустя несколько дней", signal: "2026-06-10", open: "2026-06-16", time: "08:41",
+      note: "Крайний случай: уведомление пролежало непрочитанным. Изменение против клиента больше обычного дня — путь останавливается модальным окном." },
+    { id: "better", label: "Курс ушёл в пользу клиента", when: "на следующий день", signal: "2026-05-19", open: "2026-05-20", time: "10:20",
+      note: "Другое срабатывание, обратный исход. Раскрытие асимметрично: хорошую новость сообщаем плашкой и не заставляем подтверждать." }
+  ];
+  var ISO = "TJS";
+  var AMOUNT = 50000;
+  var SEND_TIME = "09:30";
+  var scenario = SCENARIOS[0];
+  var sheetOpen = false;
+  var view = "lock";
+
+  function seriesAt(date) {
+    var pts = D.corridors[ISO].series;
+    for (var i = 0; i < pts.length; i++) if (pts[i].d === date) return pts[i];
+    return pts[pts.length - 1];
+  }
+  function signalAt(date) {
+    var s = D.corridors[ISO].signals;
+    for (var i = 0; i < s.length; i++) if (s[i].date === date) return s[i];
+    return s[s.length - 1];
+  }
+  function state() {
+    var sig = signalAt(scenario.signal);
+    var now = seriesAt(scenario.open);
+    var deltaBps = (now.r / sig.rate - 1) * 10000;
+    var threshold = D.corridors[ISO].stats.median_move_bps;
+    var level = deltaBps <= 0.5 && deltaBps >= -0.5 ? "same"
+      : deltaBps < 0 ? "better"
+      : deltaBps <= threshold ? "mild" : "stale";
+    return {
+      sig: sig, now: now, deltaBps: deltaBps, threshold: threshold, level: level,
+      gotThen: AMOUNT / sig.rate, gotNow: AMOUNT / now.r
+    };
+  }
+
+  function freshnessBlock(st) {
+    var stamp = ru(st.sig.date) + ", " + SEND_TIME;
+    if (st.level === "same") {
+      return '<div class="freshness ok"><span class="dot"></span><span><b>Данные актуальны на ' + stamp + '</b><br>Курс с момента уведомления не менялся.</span></div>';
+    }
+    if (st.level === "better") {
+      return '<div class="freshness ok"><span class="dot"></span><span><b>Данные были актуальны на ' + stamp + '</b><br>С тех пор курс изменился в вашу пользу на ' + pct(st.deltaBps) + ": получатель получит на " + fmt(st.gotNow - st.gotThen, 2) + " " + ISO + " больше.</span></div>";
+    }
+    if (st.level === "mild") {
+      return '<div class="freshness note"><span class="dot"></span><span><b>Данные были актуальны на ' + stamp + '</b><br>Актуальные данные могли измениться: с тех пор курс изменился на ' + pct(st.deltaBps) + ", форма уже пересчитана по курсу на " + ru(st.now.d) + ".</span></div>";
+    }
+    return '<div class="freshness warn"><span class="dot"></span><span><b>Данные были актуальны на ' + stamp + '</b><br>Актуальные данные могли измениться — курс изменился на ' + pct(st.deltaBps) + " не в вашу пользу.</span></div>";
+  }
+
+  function lockScreen(st) {
+    return '<div class="statusbar"><span>' + SEND_TIME + '</span><span class="sig">●●●● Alfa 5G</span></div>' +
+      '<div class="lock">' +
+      '<div class="lock-time">' + SEND_TIME + "</div>" +
+      '<div class="lock-date">' + ruLong(st.sig.date) + ", " + weekday(st.sig.date) + "</div>" +
+      '<button class="push" id="pushBtn" type="button">' +
+      '<span class="push-head"><span class="logo" aria-hidden="true">А</span>Альфа-Банк<span class="when">сейчас</span></span>' +
+      "<b>Переводы за рубеж</b>" +
+      "<p>Курс " + D.corridors[ISO].name + " сейчас на " + fmt(Math.abs(st.sig.deviation_pct), 1) +
+      " % ниже своего среднего за последние " + st.sig.span + " наблюдений.</p>" +
+      "</button>" +
+      '<div class="lock-hint">Нажмите на уведомление</div>' +
+      "</div>";
+  }
+
+  function transferScreen(st) {
+    var digits = rateDigits(ISO);
+    return '<div class="statusbar"><span>' + scenario.time + '</span><span class="sig">●●●● Alfa 5G</span></div>' +
+      '<div class="app">' +
+      '<div class="appbar"><button class="back" id="backBtn" type="button" aria-label="Назад">‹</button><h4>Перевод за рубеж</h4></div>' +
+      '<div class="appbody">' +
+      freshnessBlock(st) +
+      '<div class="tile"><div class="tile-row">' +
+      '<span class="avatar">ФА</span>' +
+      '<span class="grow"><span class="tile-label">Получателю в ' + D.corridors[ISO].country + '</span><br><span class="tile-value">Фарход А. · карта •• 4417</span></span>' +
+      "</div></div>" +
+      '<div class="tile">' +
+      '<div class="tile-label">Сумма перевода</div>' +
+      '<div class="amount">' + fmt(AMOUNT, 0) + " ₽</div>" +
+      '<div class="gets" style="margin-top:6px">Получатель получит ≈ <b>' + fmt(st.gotNow, 2) + " " + ISO + "</b></div>" +
+      '<div class="small" style="margin-top:8px">Курс ЦБ на ' + ru(st.now.d) + ": 1 " + ISO + " = " + fmt(st.now.r, digits) + " ₽</div>" +
+      "</div>" +
+      '<div class="tile"><div class="tile-label" style="margin-bottom:6px">Почему мы написали</div>' +
+      '<div class="fact">' + "Курс " + D.corridors[ISO].name + " на " + fmt(Math.abs(st.sig.deviation_pct), 1) +
+      " % ниже своего среднего за последние " + st.sig.span + " наблюдений. Данные ЦБ на " + ru(st.sig.date) + ".</div>" +
+      "</div>" +
+      '<p class="small">Сумма и получатель подставлены из ваших прошлых переводов — их можно изменить.</p>' +
+      "</div>" +
+      '<div class="appfoot"><button class="btn" type="button">Перевести ' + fmt(AMOUNT, 0) + " ₽</button></div>" +
+      "</div>" +
+      (sheetOpen ? sheet(st) : "");
+  }
+
+  function sheet(st) {
+    var digits = rateDigits(ISO);
+    return '<div class="sheet-scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">' +
+      '<div class="grabber"></div>' +
+      '<h3 id="sheetTitle">Курс изменился с момента уведомления</h3>' +
+      '<p class="stale-line">Данные были актуальны на <b>' + ru(st.sig.date) + ", " + SEND_TIME +
+      "</b>. Актуальные данные могли измениться — ниже курс на " + ru(st.now.d) + ".</p>" +
+      '<div class="compare">' +
+      '<div class="side"><div class="cap">в уведомлении</div><div class="val">' + fmt(st.sig.rate, digits) + ' ₽</div><div class="sub">≈ ' + fmt(st.gotThen, 2) + " " + ISO + "</div></div>" +
+      '<div class="arrow" aria-hidden="true">→</div>' +
+      '<div class="side now"><div class="cap">сейчас</div><div class="val">' + fmt(st.now.r, digits) + ' ₽</div><div class="sub">≈ ' + fmt(st.gotNow, 2) + " " + ISO + "</div></div>" +
+      "</div>" +
+      '<p class="delta-line">Курс изменился на <b>' + pct(st.deltaBps) + "</b> не в вашу пользу: при переводе " + fmt(AMOUNT, 0) +
+      " ₽ получатель получит на <b>" + fmt(st.gotThen - st.gotNow, 2) + " " + ISO + "</b> меньше, чем было в уведомлении.</p>" +
+      '<div class="sheet-actions">' +
+      '<button class="btn" type="button">Перевести по текущему курсу</button>' +
+      '<button class="btn grey" type="button" id="notifyBtn">Напомнить при следующем сигнале</button>' +
+      '<button class="btn ghost" type="button" id="closeSheet">Не сейчас</button>' +
+      "</div>" +
+      '<p class="why">Курс ЦБ РФ, без спреда и комиссии перевода</p>' +
+      "</div></div>";
+  }
+
+  function renderRail(st) {
+    var steps = [
+      { t: "Слой выбрал день", p: "Счёт выше скользящего порога, недельный бюджет не исчерпан, факт проверен и истинен. Дата котировки — " + ru(st.sig.date) + "." },
+      { t: "Пуш ушёл в " + SEND_TIME, p: "Одно предложение с проверяемым фактом и ровно одним следующим действием. В payload уходит снимок: дата котировки, курс, текст факта." },
+      { t: "Клиент открыл уведомление", p: "Открыл " + scenario.when + " — " + ru(st.now.d) + ", " + scenario.time + ". Приложение сравнивает снимок из пуша с текущей котировкой." },
+      {
+        t: st.level === "stale" ? "Модальное окно: момент изменился" : "Экран перевода предзаполнен",
+        p: st.level === "stale"
+          ? "Изменение " + pct(st.deltaBps) + " против клиента больше обычного дневного движения (" + fmt(st.threshold, 0) + " б.п.) — показываем было/стало и просим подтвердить."
+          : "Получатель и сумма подставлены, курс пересчитан, плашка называет дату, на которую данные были актуальны."
+      }
+    ];
+    var activeStep = view === "lock" ? 1 : 3;
+    document.getElementById("rail").innerHTML = steps.map(function (s, i) {
+      return '<div class="step" data-active="' + (i <= activeStep) + '">' +
+        '<span class="dot">' + (i + 1) + "</span>" +
+        "<div><h4>" + s.t + "</h4><p>" + s.p + "</p></div></div>";
+    }).join("");
+  }
+
+  function renderLayerOut(st) {
+    var rows = [
+      ["decision", "candidate"],
+      ["indicator", "zscore_tuned"],
+      ["window · speed", st.sig.window + " · " + st.sig.speed],
+      ["deviation_pct", fmt(st.sig.deviation_pct, 2) + " %"],
+      ["strength_pct", st.sig.strength_pct === null ? "—" : fmt(st.sig.strength_pct * 100, 0) + "-й перц."],
+      ["scenario", st.sig.scenario],
+      ["rub_per_unit", fmt(st.sig.rate, rateDigits(ISO))],
+      ["проверка факта", "пройдена"]
+    ];
+    document.getElementById("layerOut").innerHTML = rows.map(function (r) {
+      return "<span>" + r[0] + "</span><b>" + r[1] + "</b>";
+    }).join("") +
+      '<span style="grid-column:1/-1;margin-top:8px;color:var(--muted)">message</span>' +
+      '<b style="grid-column:1/-1;font-family:var(--mono);font-size:12.5px;line-height:1.5">' + st.sig.message + "</b>";
+  }
+
+  function render() {
+    var st = state();
+    var screen = document.getElementById("screen");
+    screen.innerHTML = view === "lock" ? lockScreen(st) : transferScreen(st);
+
+    var push = document.getElementById("pushBtn");
+    if (push) {
+      push.addEventListener("click", function () {
+        view = "app";
+        sheetOpen = st.level === "stale";
+        render();
+      });
+    }
+    var back = document.getElementById("backBtn");
+    if (back) {
+      back.addEventListener("click", function () { view = "lock"; sheetOpen = false; render(); });
+    }
+    var close = document.getElementById("closeSheet");
+    if (close) {
+      close.addEventListener("click", function () { sheetOpen = false; render(); });
+    }
+    var notify = document.getElementById("notifyBtn");
+    if (notify) {
+      notify.addEventListener("click", function () {
+        notify.textContent = "Напомним при следующем сигнале";
+        notify.disabled = true;
+        notify.style.opacity = ".7";
+      });
+    }
+    var scrim = document.getElementById("scrim");
+    if (scrim) {
+      scrim.addEventListener("click", function (e) {
+        if (e.target === scrim) { sheetOpen = false; render(); }
+      });
+    }
+
+    document.getElementById("scenarioNote").textContent = scenario.note;
+    renderRail(st);
+    renderLayerOut(st);
+  }
+
+  var chips = document.getElementById("scenarioChips");
+  SCENARIOS.forEach(function (sc) {
+    var b = document.createElement("button");
+    b.className = "chip";
+    b.type = "button";
+    b.textContent = sc.label;
+    b.setAttribute("aria-pressed", String(sc === scenario));
+    b.addEventListener("click", function () {
+      scenario = sc;
+      view = "lock";
+      sheetOpen = false;
+      Array.prototype.forEach.call(chips.children, function (el) {
+        el.setAttribute("aria-pressed", String(el === b));
+      });
+      render();
+    });
+    chips.appendChild(b);
+  });
+
+  /* ── Тема ───────────────────────────────────────────── */
+  document.getElementById("theme").addEventListener("click", function () {
+    var root = document.documentElement;
+    var dark = root.getAttribute("data-theme") === "dark" ||
+      (!root.getAttribute("data-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    root.setAttribute("data-theme", dark ? "light" : "dark");
+    drawChart(current);
+  });
+
+  drawChart(current);
+  drawSignalCard(current);
+  render();
+})();
+</script>
+</body>
+</html>
