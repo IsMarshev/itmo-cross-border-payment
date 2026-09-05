@@ -5,6 +5,21 @@ favourable days for cross-border RUB transfers.  The model layer is intentionall
 not included yet: the first milestone is a canonical, validated and
 leakage-safe representation of public exchange-rate observations.
 
+## Демо-стенды
+
+```bash
+docker compose up --build
+```
+
+- `http://localhost:8100` — симуляция: календарь идёт по дню, на сигнале встаёт
+  пауза, пуш прилетает на телефон, а экран перевода показывает, что стало с
+  курсом, пока уведомление лежало непрочитанным. Логика —
+  `signal_layer.services.simulation`, интерфейс — `demo/sim/`.
+- `http://localhost:8100/stand/` — статический стенд кейса: график срабатываний,
+  клиентский путь, механика «момент изменился», тексты, матрица требований.
+
+Без докера: `uv run python demo/sim/server.py`.
+
 ## Setup
 
 ```bash

@@ -1,0 +1,23 @@
+# Всё, что не нужно образу: локальное окружение, история и артефакты прогонов.
+.venv/
+.git/
+.gitignore
+.ruff_cache/
+.pytest_cache/
+**/__pycache__/
+**/*.py[cod]
+.DS_Store
+
+# Отчёты бэктеста весят и в рантайме стендов не участвуют.
+reports/
+tests/
+poetry.lock
+
+# Документация кейса — читается в репозитории, не в контейнере.
+BENCHMARK.md
+HANDOFF.md
+MVP.md
+implementation_plan.md
+signal_layer_v2.md
+task.md
+сlaude.md
