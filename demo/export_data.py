@@ -92,13 +92,19 @@ for iso in CORRIDORS:
                 "date": d.strftime("%Y-%m-%d"),
                 "rate": round(here, 6),
                 "follow": follow,
-                "fwd10_bps": None if fwd.empty else round((float(fwd.mean()) / here - 1) * 10000, 1),
+                "fwd10_bps": None
+                if fwd.empty
+                else round((float(fwd.mean()) / here - 1) * 10000, 1),
                 "deviation_pct": round(float(r["deviation_pct"]), 3),
                 "window": str(r["window"]),
                 "span": int(str(r["window"]).split("=")[1]),
                 "speed": str(r["speed"]),
-                "strength_pct": None if not np.isfinite(float(r["strength_pct"])) else round(float(r["strength_pct"]), 4),
-                "level_percentile": None if not np.isfinite(float(r["level_percentile"])) else round(float(r["level_percentile"]), 1),
+                "strength_pct": None
+                if not np.isfinite(float(r["strength_pct"]))
+                else round(float(r["strength_pct"]), 4),
+                "level_percentile": None
+                if not np.isfinite(float(r["level_percentile"]))
+                else round(float(r["level_percentile"]), 1),
                 "scenario": str(r["scenario"]),
                 "direction": str(r["direction"]),
                 "message": str(r["message"]),
@@ -128,7 +134,8 @@ for asof in ["2026-05-19", "2026-06-10", "2026-07-10", "2026-08-21"]:
     t = pd.Timestamp(asof)
     cut = signals_asof(panel, ["TJS"], t)
     a = sorted(cut[cut["signal_date"] >= START]["signal_date"].dt.strftime("%Y-%m-%d"))
-    b = sorted(full[(full["signal_date"] >= START) & (full["signal_date"] <= t)]["signal_date"].dt.strftime("%Y-%m-%d"))
+    reached = full[(full["signal_date"] >= START) & (full["signal_date"] <= t)]
+    b = sorted(reached["signal_date"].dt.strftime("%Y-%m-%d"))
     out["asof_audit"].append(
         {"asof": asof, "n": len(a), "identical": a == b, "fired_today": asof in a}
     )

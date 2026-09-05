@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Симуляция сигнального слоя</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="stage">
+  <div class="phone">
+    <div class="notch" aria-hidden="true"></div>
+    <div class="screen" id="screen"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="tabs" id="tabs" role="tablist" aria-label="Коридор"></div>
+      <div class="clock">
+        <div class="d" id="clockDate">—</div>
+        <div class="s" id="clockRate">—</div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <svg class="chart" id="chart" viewBox="0 0 900 380" role="img" aria-label="Курс коридора и отметки срабатываний сигнала"></svg>
+      <div class="legend">
+        <span><i style="background:var(--ink-2)"></i>курс ЦБ, ₽ за единицу</span>
+        <span><i style="background:var(--muted);height:0;border-top:2px dashed var(--muted)"></i>тренд EWMA</span>
+        <span><i style="background:var(--red);height:8px;width:8px;border-radius:50%"></i>сигнал → пуш</span>
+        <span>↓ ниже — выгоднее отправителю</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="ctl primary" id="play" type="button">▶ Симуляция</button>
+      <button class="ctl" id="pause" type="button">❚❚ Пауза</button>
+      <span class="status" id="status"><span class="led"></span><span id="statusText">готово к запуску</span></span>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
