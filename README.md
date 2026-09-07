@@ -1,120 +1,278 @@
-# Cross-border payment signal layer
+# Сигнальный слой трансграничных переводов
 
-Backend foundation for an explainable signal layer that finds potentially
-favourable days for cross-border RUB transfers.  The model layer is intentionally
-not included yet: the first milestone is a canonical, validated and
-leakage-safe representation of public exchange-rate observations.
+Подсказывает клиенту день, в который перевод в СНГ выгоднее обычного.
+Коридоры RUB → TJS / UZS / KGS / AMD / KZT, данные — дневные курсы ЦБ РФ.
 
-## Демо-стенды
+Ссылка на демо: http://157.228.137.71/
+
+---
+
+## 1. Как запустить
+
+### Демо (всё одним контейнером)
 
 ```bash
 docker compose up --build
 ```
 
-- `http://localhost:8100` — симуляция: календарь идёт по дню, на сигнале встаёт
-  пауза, пуш прилетает на телефон, а экран перевода показывает, что стало с
-  курсом, пока уведомление лежало непрочитанным. Логика —
-  `signal_layer.services.simulation`, интерфейс — `demo/sim/`.
-- `http://localhost:8100/stand/` — статический стенд кейса: график срабатываний,
-  клиентский путь, механика «момент изменился», тексты, матрица требований.
+- **http://localhost:8100** — симуляция: календарь идёт по дню, на сигнале
+  встаёт пауза, пуш прилетает на телефон, экран перевода показывает, что стало
+  с курсом, пока уведомление лежало непрочитанным.
+- **http://localhost:8100/stand/** — статический стенд кейса: график
+  срабатываний, клиентский путь, тексты, матрица требований.
 
-Без докера: `uv run python demo/sim/server.py`.
+Слой считает walk-forward один раз при старте (~3 с на пять коридоров),
+поэтому контейнер поднимается уже готовым.
 
-## Setup
+### Локально, без докера
 
 ```bash
 uv sync
-uv run pytest
+uv run python demo/sim/server.py        # то же демо на :8100
+uv run pytest                           # 75 тестов
 uv run ruff check .
 ```
 
-## Minimal API
+### API
 
 ```bash
 uv run uvicorn signal_layer.api.app:app --reload
 ```
 
-The service exposes:
+| Эндпоинт | Что отдаёт |
+|---|---|
+| `GET /health` | готовность, число наблюдений, дата последней котировки |
+| `GET /v1/rates/{ISO}/latest?as_of=YYYY-MM-DD` | курс, известный на дату |
+| `GET /v1/signals/{ISO}/evaluate?as_of=YYYY-MM-DD` | сигнал-кандидат на дату |
+| `POST /v1/backtests/run` | бэктест по историческому окну |
 
-- `GET /health`;
-- `GET /v1/rates/{ISO}/latest?as_of=YYYY-MM-DD`;
-- `GET /v1/signals/{ISO}/evaluate?as_of=YYYY-MM-DD&strategy=baseline|ridge`;
-- `POST /v1/backtests/run`.
-
-The signal endpoint returns a non-stateful *candidate*, not a delivered push.
-Its client-facing message contains only a trailing-rate fact. The optional
-Ridge strategy is trained only on targets whose full future horizon was already
-available by the requested as-of date.
-
-## CBSB-1 benchmark and the utility/risk model
-
-`BENCHMARK.md` defines how a signal layer is judged: every strategy — random,
-rule, model, oracle — gets the same push budget, is evaluated only out of time,
-and is tested against a matched random schedule rather than against zero.
+### Бенчмарк — главный артефакт защиты
 
 ```bash
 uv run python -m signal_layer.run_benchmark --out reports/benchmark
 ```
 
-A run writes `reports/benchmark/dashboard.html` — a standalone page (inline SVG,
-no external dependencies, light and dark) that leads with the run's conclusions
-— alongside `scorecard.md` and the raw CSVs.
+Пять коридоров ≈ 3 минуты. На выходе `dashboard.html` (автономная страница,
+inline SVG, светлая и тёмная темы), `scorecard.md` и сырые CSV.
+Спецификация и разбор цифр — `BENCHMARK.md`, читать до таблиц.
 
-`signal_layer.signals` is what ships, and the only entry point that serves: a
-z-score whose window is chosen walk-forward, which refuses any day whose push
-would have no true favourable fact to state. 81.7bp of client money per transfer
-against 23.4 for the same rule with a fixed window, significant on all five
-corridors. It takes no strategy parameter — the benchmark makes that choice.
+Данные берутся из `currency_data/rates_<ISO>.csv`; путь переопределяется
+переменной `SIGNAL_LAYER_DATA_DIR`.
+
+---
+
+## 2. В чём суть решения
+
+**Отправляется калиброванный z-score с вето на правдивость.** Всё остальное —
+инфраструктура вокруг этого решения.
+
+**Как считается сигнал.** Отклонение курса от тренда в единицах скользящей
+сигмы. Окно не зашито: выбирается walk-forward из сетки
+{5, 10, 20, 40, 60, 120, 250} по трейлинговой ранговой корреляции счёта с
+деньгами клиента — и только на строках, чей исход к моменту решения уже созрел.
+Против фиксированного окна это +30% (30.5 против 23.4 б.п.).
+
+**Вето на правдивость — крупнейшее улучшение проекта.** Если в момент отправки
+курс не ниже тренда, который измерил сам индикатор, день отвергается и слот
+достаётся следующему пригодному. Начиналось как комплаенс (пуш обязан
+утверждать правду), оказалось главным источником качества:
+
+| | выгода клиента | пушей/нед | коридоров с плюсом |
+|---|---|---|---|
+| все дни, выбранные политикой | 30.5 б.п. | 1.67 | 5/5 |
+| **только с правдивым фактом** | **81.7 б.п.** | 1.11 | 5/5, все значимы |
+| отсечённые дни | −65.1 б.п. | 0.60 | 0/5 |
+
+Отсечённые дни не просто немые — они теряют клиенту деньги на каждом коридоре.
+
+**Пуш утверждает факт о прошлом, а не прогноз.** «Курс ниже тренда за N дней» —
+проверяемое утверждение, правдивое по построению и обеспеченное вето. Никаких
+обещаний и ничего, что читается как инвестиционный совет.
+
+**Как это измерено честно.** Пять правил бенчмарка CBSB-1:
+
+1. **Одинаковый бюджет пушей у всех** — случайной стратегии, правила, модели,
+   оракула: ≤2 пуша в неделю на коридор, кулдаун 1 наблюдение. Меряется только
+   качество выбора дня; выиграть частотой невозможно.
+2. **Только out-of-time** — 10 последовательных полугодовых окон, 2021-09 … 2026-08.
+3. **Клиент действует на одно наблюдение позже** — снимает вопрос о лаге
+   публикации ЦБ ценой чуть худших цифр.
+4. **Никакого заглядывания вперёд, и это проверяется** — счёт пересчитывается на
+   физически обрезанной панели, расхождение > 1e-9 проваливает прогон.
+5. **Эталон — не ноль, а случайное расписание** того же размера: 500 розыгрышей
+   на пару (стратегия, коридор) в каждом окне, из них берётся p-value.
+
+Главная метрика — `currency_gain_bps`: на сколько базисных пунктов больше валюты
+клиент получает за свои рубли, переводя в этот день, а не в средний день вокруг
+(±h). Усредняется `1/курс`, а не курс: клиент тратит рубли. Окно сравнения
+намеренно локальное — перевод семье не откладывают на квартал.
+
+**Что не закрыто, честно.** Из семи обязательных гейтов ТЗ пройдены четыре.
+Не пройдены lift 0.98, ровность 1.36 и максимальная пауза 90 дней: требование
+правдивости заставляет молчать в растущем рынке. Лечится вторым типом сообщения
+(«окно закрывается») на такие периоды — это следующий шаг, а не сделанный.
+
+**Побочная находка, которая меняет постановку.** Два правила правдивости из ТЗ
+противоречат друг другу. «Курс h дней не поднимался выше» коррелирует с деньгами
+клиента на **−0.39**: оно выполняется ровно тогда, когда курс продолжал падать,
+то есть когда следовало подождать. Дни, где сработало «сейчас выгодно», стоили
+клиенту в среднем −165 б.п.; «окно закрывается» дало +89 б.п. Гнаться за hit rate
+по первому правилу — систематически выбирать плохие дни.
+
+---
+
+## 3. Почему отказались от ML
+
+Обучаемая модель была основным подходом и проиграла правилам. Это измеренный
+результат, а не выбор из удобства.
+
+**MVP полезности/риска** — три walk-forward головы: `p_min` (логит,
+P(локальный минимум)), `u_bps` (ridge, ожидаемая выгода), `p_bad` (логит,
+P(плохого пуша)), сведённые в mean-risk счёт `score = [u − λ·risk] − [baseline]`.
+Итог: **14.0 б.п. и плюс на 2 коридорах из 5**, против 23.4 б.п. и 5/5 у простого
+z-score с зашитым окном. Хуже любой статистики в прогоне.
+
+Прежде чем объявить это результатом, проверили три очевидных объяснения. Ни одно
+не подтвердилось — все прогоны воспроизводятся ключами CLI:
+
+| что меняли | результат | вывод |
+|---|---|---|
+| `--feature-set raw` | 14.0 б.п. | лучший вариант, и он проигрывает |
+| `--feature-set rules` (веса на индикаторах, п.8 ТЗ) | **−7.0 б.п.** | гипотеза ТЗ не подтвердилась |
+| `--feature-set both` | 12.2 б.п. | лишние колонки не помогают |
+| `--ridge-alpha 1 … 30000` | 5.3 → 4.6 → 3.0 → 0.4 → −4.4 | монотонно хуже: дело не в переобучении |
+| `--lam 0 … 5` | кривая плоская | голова риска коллинеарна голове полезности |
+
+**Вывод в одну строку: при сигнале ~15 б.п. против σ ~300 одна робастная
+статистика бьёт линейную комбинацию, подогнанную под такой шум.** Особенно
+показателен провал `rules`: индикаторы сильно коллинеарны, и линейное смешивание
+разрушает то устойчивое ранжирование, которое у каждого из них есть по
+отдельности.
+
+Ранняя Ridge-модель добавляет тот же диагноз с другой стороны: она проигрывала
+даже DCA (−1…−2.7% по валюте), потому что таргет `median(future) − rate` ловит
+*отскок вверх*, а клиенту нужна *абсолютная дешевизна*. Модель сигналила поздно,
+в ожидании разворота, и пропускала реальные просадки.
+
+**Что от обучения всё-таки осталось.** Отказ от ML — не отказ от калибровки.
+Walk-forward выбирает **параметр**, но не **семейство** и не коэффициенты:
+
+- выбор окна z-score walk-forward — **+30%**, лучше на всех пяти коридорах;
+- `rule_select` (выбор *какого* индикатора под коридор) — 18.0 б.п., **хуже**,
+  чем просто всегда брать z-score;
+- гипотеза ТЗ «калибровать по коридорам, потому что волатильность разная» **не
+  подтвердилась**: все пять коридоров выбирают `span=10` и никогда не
+  переключаются. Выигрыш идёт от того, что горизонт сигнала совпал с горизонтом
+  проверки (h = 10), а не от подстройки под коридор.
+
+Модель осталась в репозитории как воспроизводимое свидетельство, а не как живой
+путь: `signal_layer.utility_risk`, прогон — `--strategies utility_risk`.
+Ничего из неё не обслуживает клиента. ТЗ прямо просит не прятать отрицательный
+результат.
+
+---
+
+## 4. Архитектура
+
+Один принцип определяет всю раскладку: **бенчмарк решает, `signals.py`
+отправляет.** У живого слоя нет параметра стратегии — сделать победителя
+переключаемым значило бы позволить дойти до клиента тому, что бенчмарк не
+одобрял. Чтобы сменить то, что отправляется, надо сначала сменить вердикт
+бенчмарка.
+
+```
+currency_data/rates_<ISO>.csv          выгрузка ЦБ (offline, collect_cbr.py)
+        │
+        ▼
+  data/normalization.py    канонная панель: rub_per_unit (RUB за 1 единицу,
+        │                  меньше = выгоднее), available_on = лаг публикации +1 день
+        ▼
+     features.py           строго backward-looking признаки: as-of контракт
+        │
+        ▼
+      rules.py             библиотека индикаторов ТЗ — одна на всех потребителей
+        │
+        ▼
+     adaptive.py           walk-forward выбор параметра (не коэффициентов)
+        │
+        ▼
+  ┌─ signals.py ─────────────────────────────────────────┐
+  │  ЕДИНСТВЕННАЯ рабочая точка входа                     │
+  │  z-score + вето на правдивость + политика отправки    │
+  └───────────────────────┬───────────────────────────────┘
+                          │
+        ┌─────────────────┼──────────────────┐
+        ▼                 ▼                  ▼
+  services/          api/app.py         demo/sim/
+  (тонкий слой,      FastAPI            симуляция и стенд
+   без решений)
+```
+
+Оценочный контур живёт сбоку и никогда не читается на решении:
+
+```
+labels.py          единственное место с заглядыванием вперёд; джойнится
+                   к сигналу ТОЛЬКО после того, как сигнал уже произведён
+   │
+   ├──▶ benchmark/     CBSB-1 — судья: runner, strategies, spec, stats,
+   │                   report, dashboard
+   ├──▶ backtesting/   политика отправки, исходы, журнал решений
+   └──▶ utility_risk.py отвергнутая модель, хранится как evidence
+```
+
+### Что где лежит
+
+| Модуль | Роль |
+|---|---|
+| `data/normalization.py` | канонная панель; нормировка по номиналу, лаг публикации |
+| `data/collect_cbr.py` | producer CSV из XML ЦБ; запускается вручную и редко, вне онлайн-пути |
+| `features.py` | признаки, каждый — только по `available_on <= T` |
+| `rules.py` | индикаторы ТЗ (уровень, момент, сезонность, разворот) в одном месте |
+| `adaptive.py` | walk-forward калибровка: выбирает среди готовых счётчиков, не подгоняет веса |
+| **`signals.py`** | **что отправляется**: индикатор, вето, политика, текст пуша |
+| `backtesting/policy.py` | коммуникационная политика с журналом решений — общая для всех стратегий |
+| `labels.py` | ground truth; единственный look-ahead в проекте |
+| `benchmark/` | CBSB-1: гейты, случайные расписания, статистика, дашборд |
+| `utility_risk.py` | отвергнутый ML-MVP, оставлен воспроизводимым |
+| `services/` | резолв коридора и даты в ответ слоя; решений не принимает |
+| `api/` | FastAPI: `/health`, `/v1/rates`, `/v1/signals`, `/v1/backtests` |
+| `demo/` | симуляция по дням (`demo/sim/`) и статический стенд кейса |
+
+### Два контракта, которые держатся везде
+
+- **На дату T — только данные T.** Окно z-score выбирается walk-forward,
+  политика идёт хронологически, `signals_asof` отвечает на вопрос «что мы бы
+  отправили на дату T» по панели с физически удалённым будущим. Аудит на
+  заглядывание — дисквалифицирующее условие бенчмарка.
+- **Только факты.** Текст сообщения утверждает то, что курс уже сделал.
+  Ни прогноза, ни обещания.
+
+### Использование как библиотеки
 
 ```python
+from signal_layer.data import read_rate_directory
 from signal_layer.signals import signal_table, signals_asof
-signal_table(panel, ["TJS", "UZS"])       # the brief's signal table
-signals_asof(panel, ["TJS"], "2026-06-15")  # what we would have sent on that date
+
+panel = read_rate_directory("currency_data")
+signal_table(panel, ["TJS", "UZS"])          # таблица сигналов из ТЗ
+signals_asof(panel, ["TJS"], "2026-06-15")   # что бы отправили на эту дату
 ```
 
-`signal_layer.utility_risk` is the MVP scored by it: three walk-forward heads
-(P(local minimum), expected advantage, P(bad push)) combined into a mean-risk
-score in basis points, `score = [u - lambda*risk] - [baseline]`, where `lambda`
-is the price of an asymmetric error. Read `BENCHMARK.md` before the numbers.
+### Формат входных данных
 
-## Stage-4 backtest
+`currency_data/rates_<ISO>.csv` — колонки `date`, `iso`, `nominal`, `rate`
+(рублей за `nominal` единиц). `read_rate_directory()` приводит их к
+`rub_per_unit`, поэтому валюты с разным официальным номиналом сравнимы напрямую.
+Код признаков обязан использовать `available_on`, а не дату котировки.
 
-Run the canonical baseline backtest and write an exhaustive decision journal,
-matched random schedules and a summary report:
+---
 
-```bash
-uv run python -m signal_layer.run_backtest \
-  --corridors TJS UZS KGS AMD KZT \
-  --score-source baseline \
-  --horizon 20 \
-  --out reports/backtest
-```
+## Документация
 
-`decision_log.jsonl` includes every evaluated day, the historical threshold,
-remaining communication slots, decision reason and realised outcome. Outcomes
-are joined only after the chronological policy has completed. The random
-baseline selects the same number of dates inside every corridor and
-communication window. Confidence intervals use moving-block bootstrap.
-
-Each run also produces a standalone `dashboard.html` with KPI, confidence
-intervals, matched-random comparison, risk, signal frequency and outcome
-distribution. Regenerate it independently with:
-
-```bash
-uv run python -m signal_layer.dashboard --report-dir reports/backtest
-```
-
-## Rate data contract
-
-Input files are named `currency_data/rates_<ISO>.csv` and must contain:
-
-- `date` — quote date;
-- `iso` — a three-letter currency code;
-- `nominal` — number of currency units in the official quote;
-- `rate` — RUB for that nominal.
-
-`signal_layer.data.read_rate_directory()` returns the canonical panel.  Its
-`rub_per_unit` column is always RUB for one unit of foreign currency, so rates
-with different official nominals can safely be compared. `available_on` applies
-a one-calendar-day publication lag by default; feature code must use this date
-instead of the quote date to remain as-of safe.
+| Файл | О чём |
+|---|---|
+| `BENCHMARK.md` | спецификация CBSB-1, все цифры и их оговорки — **читать первым** |
+| `HANDOFF.md` | состояние проекта, находки, что делать дальше |
+| `MVP.md`, `signal_layer_v2.md` | проектные решения по слою |
+| `implementation_plan.md` | план по этапам |
+| `task.md` | исходное ТЗ |
