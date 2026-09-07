@@ -1,0 +1,17 @@
+# docker compose up --build
+#
+# Симуляция          → http://localhost:8100
+# Статический стенд  → http://localhost:8100/stand/
+services:
+  demo:
+    build: .
+    image: signal-layer-demo
+    ports:
+      - "8100:8100"
+    environment:
+      SIGNAL_LAYER_DATA_DIR: /app/currency_data
+    # Обновили выгрузку ЦБ — раскомментируйте, и контейнер подхватит её
+    # без пересборки образа.
+    # volumes:
+    #   - ./currency_data:/app/currency_data:ro
+    restart: unless-stopped
